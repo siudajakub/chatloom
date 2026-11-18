@@ -28,8 +28,9 @@ class WorkerConfig {
   /// Lets the operator keep automatic work to local sources only.
   final bool autoTranscriptionMatrix;
 
-  /// Operator permission for automatic shared reels, additionally requiring
-  /// the synced user's kind permission. Manual transcription is unaffected.
+  /// Former operator permission for automatic shared reels. Still parsed so
+  /// existing configs load, but ignored: since 2026-11-18 shared reels are
+  /// never transcribed, whatever this says.
   final bool autoTranscriptionReels;
 
   /// The provider and speech model (`transcriptionProvider` and

@@ -221,14 +221,11 @@ abstract class RecentSourceScanner {
   /// A null [cursor] returns the current end position and no items, so the
   /// first scan never sweeps history. Returns null when the source is busy;
   /// the caller simply retries on its next interval.
-  /// [reels]: also list shared reels (kind `reel`: Instagram or Facebook
-  /// shares); the scan asks only while the synced policy transcribes them
-  /// automatically.
+  /// Shared reels (Instagram or Facebook shares) are never listed.
   Future<RecentSourcePage?> recent({
     required int? cursor,
     DateTime? since,
     int limit = 100,
-    bool reels = false,
   });
 }
 

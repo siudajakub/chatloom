@@ -24,9 +24,9 @@ const localVideoMimeTypes = {
 };
 
 /// Kinds this worker asks the adapter for. Adapters that predate video
-/// support ignore the field and keep returning voice/round only. Reels are
-/// asked for only while the policy transcribes them automatically; a current
-/// adapter then lists them as `reel`, and never as `video` otherwise.
+/// support ignore the field and keep returning voice/round only. Shared
+/// reels are never asked for nor exported (J, 2026-11-18); a current adapter
+/// never lists them as `video` either.
 const localRecentKinds = ['voice', 'round', 'video', 'audio'];
 const localReelKind = 'reel';
 const _metadataMaxBytes = 65536;
@@ -264,13 +264,16 @@ class LocalSourceTransport
   static int _exportLimit(Map<String, dynamic> metadata) {
     final mime = metadata['mimeType'];
     final kind = metadata['kind'] ?? 'voice';
+    // A shared reel is never transcribed (J, 2026-11-18).
+    if (kind == localReelKind || metadata['reel'] == true) {
+      throw const WorkerFailure('not_audio');
+    }
     if (mime is! String) throw const WorkerFailure('protected_media');
     if ((kind == 'voice' || kind == 'audio') && mime.startsWith('audio/')) {
       return localAudioMaxBytes;
     }
     if (kind == 'round' && mime == 'video/mp4') return localRoundMaxBytes;
-    if ((kind == 'video' || kind == localReelKind) &&
-        localVideoMimeTypes.contains(mime)) {
+    if (kind == 'video' && localVideoMimeTypes.contains(mime)) {
       return localAudioMaxBytes;
     }
     if (mime.startsWith('video/')) {
@@ -299,9 +302,6 @@ class LocalSourceTransport
         : kind;
   }
 
-  /// Set once an adapter refused the `reel` kind (it predates reels): later
-  /// scans of this process do not ask again, and reels stay on demand.
-  bool _reelKindRefused = false;
 
   @override
   Future<MediaFacts?> mediaFacts(SourceEventRef source) async {
@@ -396,7 +396,6 @@ class LocalSourceTransport
     required int? cursor,
     DateTime? since,
     int limit = 100,
-    bool reels = false,
   }) async {
     if (!verified) throw const WorkerFailure('device_verification_required');
     if (limit < 1 ||
@@ -406,39 +405,23 @@ class LocalSourceTransport
     }
     // A scan is optional work: skip this interval instead of waiting.
     if (_active != null) return null;
-    final askReels = reels && !_reelKindRefused;
-    Future<Uint8List> page(bool withReels) => _exclusive(
-      () => _send(
-        '/recent',
-        {
-          'accountId': accountId,
-          'cursor': cursor,
-          'sinceMs': since?.toUtc().millisecondsSinceEpoch,
-          'limit': limit,
-          'kinds': [...localRecentKinds, if (withReels) localReelKind],
-        },
-        _recentMaxBytes,
-        Cancellation(),
-      ),
-      wait: Duration.zero,
-    );
     Uint8List bytes;
     try {
-      try {
-        bytes = await page(askReels);
-      } on WorkerFailure catch (e) {
-        // A dropped connection says nothing about the kinds it knows.
-        if (!askReels ||
-            e.code == 'local_source_busy' ||
-            e is _AdapterRefused) {
-          rethrow;
-        }
-        // An adapter that predates reels refuses the unknown kind. Scan
-        // without it: reels then stay on demand rather than every
-        // automatic transcription stopping.
-        _reelKindRefused = true;
-        bytes = await page(false);
-      }
+      bytes = await _exclusive(
+        () => _send(
+          '/recent',
+          {
+            'accountId': accountId,
+            'cursor': cursor,
+            'sinceMs': since?.toUtc().millisecondsSinceEpoch,
+            'limit': limit,
+            'kinds': localRecentKinds,
+          },
+          _recentMaxBytes,
+          Cancellation(),
+        ),
+        wait: Duration.zero,
+      );
     } on WorkerFailure catch (e) {
       if (e.code == 'local_source_busy') return null;
       rethrow;

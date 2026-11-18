@@ -42,10 +42,13 @@ class _Video extends VideoPlayerController {
   @override
   Future<void> setPlaybackSpeed(double speed) async =>
       value = value.copyWith(playbackSpeed: speed);
+  @override
+  Future<void> setVolume(double volume) async =>
+      value = value.copyWith(volume: volume);
 }
 
 class _VideoEvent extends Event {
-  _VideoEvent(Room room)
+  _VideoEvent(Room room, {Map<String, Object?> extra = const {}})
     : super(
         room: room,
         type: EventTypes.Message,
@@ -62,6 +65,7 @@ class _VideoEvent extends Event {
             'mimetype': 'video/mp4',
             'duration': 60000,
           },
+          ...extra,
         },
       );
 
@@ -229,5 +233,64 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('a shared reel plays full screen under glass controls, '
+      'without caption or transcript', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    event = _VideoEvent(
+      event.room,
+      extra: {
+        'body': 'fixture.mp4',
+        'filename': 'fixture.mp4',
+        'external_url': 'https://www.instagram.com/reel/Cfixture/',
+        'com.beeper.meta.full_post_title': 'fixture',
+      },
+    );
+    // A transcript stored before 2026-11-18 is not shown either.
+    transcript();
+    await _open(tester, event);
+    video.value = video.value.copyWith(size: const Size(900, 1600));
+    await tester.pump();
+    expect(find.byType(NotionSyncedTranscript), findsNothing);
+    expect(find.byTooltip('Show transcript'), findsNothing);
+    expect(find.textContaining('instagram.com'), findsNothing);
+    // Edge to edge: the full width at 9:16.
+    final picture = tester.getSize(find.byType(VideoPlayer));
+    expect(picture.width, closeTo(390, .01));
+    expect(picture.aspectRatio, closeTo(9 / 16, .001));
+    final controls = find.byKey(const ValueKey('viewer-video-controls'));
+    expect(controls, findsOneWidget);
+    expect(tester.widget(controls), isA<NotionGlassPanel>());
+    // Mute and unmute.
+    await tester.tap(find.byKey(const ValueKey('viewer-reel-mute')));
+    await tester.pump();
+    expect(video.value.volume, 0);
+    expect(find.byTooltip('Unmute'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('viewer-reel-mute')));
+    await tester.pump();
+    expect(video.value.volume, 1);
+    // Playing, the controls fade out and a tap brings them back.
+    if (!video.value.isPlaying) {
+      await tester.tap(find.byKey(const ValueKey('viewer-reel-toggle')));
+      await tester.pump();
+    }
+    expect(video.value.isPlaying, isTrue);
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pumpAndSettle();
+    AnimatedOpacity overlay() => tester.widget<AnimatedOpacity>(
+      find.byKey(const ValueKey('viewer-reel-controls')),
+    );
+    expect(overlay().opacity, 0);
+    await tester.tap(find.byKey(const ValueKey('viewer-reel-picture')));
+    await tester.pump();
+    expect(overlay().opacity, 1);
+    // The link lives in the overflow menu.
+    await tester.tap(find.byTooltip('More options'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open in Instagram'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

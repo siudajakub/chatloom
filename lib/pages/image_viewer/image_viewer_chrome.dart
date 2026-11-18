@@ -6,6 +6,7 @@
 // (NotionMediaChrome). Scrim gradients, not glass: the chrome fades with an
 // opacity, and glass must never sit inside an animating opacity (DESIGN.md).
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/shared_reel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/file_description.dart';
@@ -112,7 +113,8 @@ class ImageViewerCaption extends StatefulWidget {
 
   /// Caption of [event] (a media body that is not just the file name).
   static String? textOf(Event event) {
-    if (event.redacted) return null;
+    // A shared reel's caption is its link: not shown over the player.
+    if (event.redacted || isSharedReel(event)) return null;
     final text = event.fileDescription?.trim();
     return text == null || text.isEmpty ? null : text;
   }

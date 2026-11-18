@@ -104,7 +104,7 @@ void main() {
     expect(await feed.drain(), isEmpty);
   });
 
-  test('a video shared from Instagram is reported as a reel', () async {
+  test('a video shared from Instagram is never a candidate', () async {
     feed.observe(
       message(r'$reel', {
         ...video(),
@@ -114,10 +114,9 @@ void main() {
     feed.observe(message(r'$clip', video()));
     final items = await feed.drain();
     expect(items.map((i) => (i.eventId, i.kind)), [
-      (r'$reel', AutoTranscriptionKind.reel),
       (r'$clip', AutoTranscriptionKind.video),
     ]);
-    // On demand a reel is transcribed like any other video.
+    // J (2026-11-18): not on demand either.
     expect(
       MatrixFeatureTransport.transcriptionSourceRejection(
         message(r'$reel-request', {
@@ -125,12 +124,12 @@ void main() {
           'external_url': 'https://www.instagram.com/reel/Cfixture/',
         }),
       ),
-      isNull,
+      'not_audio',
     );
   });
 
   test(
-    'a Facebook reel shared on Messenger is a reel, a round stays a round',
+    'a Facebook reel shared on Messenger is skipped, a round stays a round',
     () async {
       // 2026-10-26: shared Facebook reels were reported as ordinary videos and
       // transcribed automatically. Shape from mautrix-meta's Messenger
@@ -167,8 +166,6 @@ void main() {
       );
       final items = await feed.drain();
       expect(items.map((i) => (i.eventId, i.kind)), [
-        (r'$fbreel', AutoTranscriptionKind.reel),
-        (r'$fbpost', AutoTranscriptionKind.reel),
         (r'$round', AutoTranscriptionKind.round),
         (r'$tgclip', AutoTranscriptionKind.video),
       ]);
@@ -176,7 +173,7 @@ void main() {
   );
 
   test(
-    'caption-only Instagram shares stay manual through Matrix sync',
+    'caption-only Instagram shares are never transcribed through Matrix sync',
     () async {
       for (final extra in <Map<String, dynamic>>[
         {'body': 'Shared clip\nhttps://instagram.com/reel/Cfixture/'},
@@ -191,26 +188,10 @@ void main() {
           ...extra,
         });
         feed.observe(event);
-        final item = (await feed.drain()).single;
-        expect(item.kind, AutoTranscriptionKind.reel);
-        expect(
-          autoTranscriptionBlock(
-            TranscriptionPolicy.defaults,
-            AutoTranscriptionCandidate(
-              kind: item.kind,
-              network: item.network,
-              roomId: item.roomId,
-              outgoing: false,
-              timestamp: item.timestamp,
-            ),
-            now: now,
-          ),
-          'kind_disabled',
-        );
-        // This classification affects automatic work, not explicit requests.
+        expect(await feed.drain(), isEmpty);
         expect(
           MatrixFeatureTransport.transcriptionSourceRejection(event),
-          isNull,
+          'not_audio',
         );
       }
     },

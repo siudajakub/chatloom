@@ -13,6 +13,7 @@ import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media_transcript.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
+import 'package:chatloom/personal/shared_reel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -134,6 +135,14 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
   bool _coordinating = false;
   void _checkAudible() {
     final player = _videoPlayerController;
+    // A reel that starts playing hides its controls after a while.
+    if (_reel &&
+        mounted &&
+        player?.value.isPlaying == true &&
+        _controlsShown &&
+        _hideControls?.isActive != true) {
+      _revealControls();
+    }
     if (mounted &&
         player != null &&
         (_layoutSize != player.value.size ||
@@ -339,6 +348,7 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
   @override
   void dispose() {
+    _hideControls?.cancel();
     // Closing the viewer stops the transfer; nothing keeps downloading.
     _download?.cancel();
     widget.currentPage?.removeListener(_onPageChanged);
@@ -476,9 +486,47 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
 
   static const String fallbackBlurHash = 'L5H2EC=PM+yV0g-mq.wG9c010J}I';
 
+  /// A reel, post or story shared from Instagram or Facebook plays edge to
+  /// edge under glass controls that hide while it plays; no transcript
+  /// (shared reels are never transcribed, J 2026-11-18).
+  late final bool _reel = isSharedReel(widget.event);
+
+  /// Reel controls on screen; a tap on the picture shows or hides them.
+  bool _controlsShown = true;
+  Timer? _hideControls;
+  static const _controlsTimeout = Duration(seconds: 3);
+
+  /// Shows the reel controls and hides them again after a while if the
+  /// reel is playing.
+  void _revealControls() {
+    _hideControls?.cancel();
+    if (!_controlsShown) setState(() => _controlsShown = true);
+    _hideControls = Timer(_controlsTimeout, () {
+      if (!mounted) return;
+      if (_videoPlayerController?.value.isPlaying == true) {
+        setState(() => _controlsShown = false);
+      }
+    });
+  }
+
+  void _toggleControls() {
+    if (_controlsShown) {
+      _hideControls?.cancel();
+      setState(() => _controlsShown = false);
+    } else {
+      _revealControls();
+    }
+  }
+
+  Future<void> _toggleMute() => _perform(
+    (video) => video.setVolume(video.value.volume > 0 ? 0 : 1),
+  );
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) => MediaTranscriptBuilder(
+    builder: (context, constraints) => _reel
+        ? _reelLayout(context, constraints)
+        : MediaTranscriptBuilder(
       event: widget.event,
       builder: (context, transcript) => ValueListenableBuilder<bool>(
         valueListenable: MediaTranscriptPreference.visible,
@@ -491,6 +539,215 @@ class EventVideoPlayerState extends State<EventVideoPlayer> {
       ),
     ),
   );
+
+  /// The shared reel full screen: the picture fills the page (9:16 on a
+  /// phone), a big play/pause in the middle and the transport (scrub,
+  /// time, speed, mute) on a glass bar at the bottom. Both fade out while
+  /// it plays and come back on a tap.
+  Widget _reelLayout(BuildContext context, BoxConstraints constraints) {
+    final info = widget.event.content.tryGetMap<String, Object?>('info');
+    final video = _videoPlayerController;
+    final initialized = video?.value.isInitialized == true;
+    final nativeSize = initialized ? video!.value.size : null;
+    final intrinsic = initialized
+        ? video!.value.rotationCorrection % 180 == 0
+              ? nativeSize!
+              : Size(nativeSize!.height, nativeSize.width)
+        : Size(
+            (info?.tryGet<int>('w') ?? 9).toDouble(),
+            (info?.tryGet<int>('h') ?? 16).toDouble(),
+          );
+    final bounds = Size(
+      constraints.maxWidth.clamp(1.0, double.infinity),
+      constraints.maxHeight.clamp(1.0, double.infinity),
+    );
+    final fitted =
+        notionFitMedia(intrinsic.width, intrinsic.height, bounds) ?? bounds;
+    final blurHash =
+        (widget.event.infoMap as Map<String, dynamic>).tryGet<String>(
+          'xyz.amorgan.blurhash',
+        ) ??
+        fallbackBlurHash;
+    final Widget picture;
+    if (initialized) {
+      picture = GestureDetector(
+        key: const ValueKey('viewer-reel-picture'),
+        behavior: HitTestBehavior.opaque,
+        onTap: _toggleControls,
+        child: ValueListenableBuilder<VideoPlayerValue>(
+          valueListenable: video!,
+          child: VideoPlayer(video),
+          builder: (context, value, player) => value.hasError
+              ? Center(child: _failure())
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    player!,
+                    if (value.isBuffering)
+                      const Center(child: NotionDelayedSpinner()),
+                  ],
+                ),
+        ),
+      );
+    } else {
+      picture = Stack(
+        fit: StackFit.expand,
+        children: [
+          if (widget.event.hasThumbnail)
+            MxcImage(
+              event: widget.event,
+              isThumbnail: true,
+              fit: BoxFit.cover,
+              placeholder: (_) => BlurHash(
+                blurhash: blurHash,
+                width: fitted.width,
+                height: fitted.height,
+                fit: BoxFit.cover,
+              ),
+            )
+          else
+            BlurHash(
+              blurhash: blurHash,
+              width: fitted.width,
+              height: fitted.height,
+            ),
+          if (_loadFailed)
+            Center(child: _failure())
+          else if (_stopped && !_downloading)
+            Center(child: _playButton())
+          else
+            Center(
+              child: NotionDelayedReveal(
+                child: _DownloadRing(
+                  progress: _downloadProgress,
+                  received: _downloadedBytes,
+                  total: _fileSize,
+                  onCancel: _downloading ? _cancelDownload : null,
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+    final media = NotionMediaHero(
+      tag: widget.heroTag ?? widget.event.eventId,
+      sourceRadius: widget.sourceRadius,
+      child: SizedBox.fromSize(size: fitted, child: picture),
+    );
+    final framedMedia = widget.mediaFrame?.call(media) ?? media;
+    final padding = MediaQuery.paddingOf(context);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Center(key: const ValueKey('viewer-video-media'), child: framedMedia),
+        if (initialized)
+          ValueListenableBuilder<VideoPlayerValue>(
+            valueListenable: video!,
+            builder: (context, value, _) {
+              // Paused or finished: the controls stay until it plays again.
+              final shown = _controlsShown || !value.isPlaying;
+              return IgnorePointer(
+                ignoring: !shown,
+                child: AnimatedOpacity(
+                  key: const ValueKey('viewer-reel-controls'),
+                  opacity: shown ? 1 : 0,
+                  duration: NotionMotion.short,
+                  curve: NotionMotion.standard,
+                  child: Listener(
+                    // Any touch on the controls keeps them on screen.
+                    onPointerDown: (_) => _revealControls(),
+                    child: Stack(
+                      children: [
+                        Center(
+                          child: NotionGlassPanel(
+                            borderRadius: NotionRadius.pillAll,
+                            child: IconButton(
+                              key: const ValueKey('viewer-reel-toggle'),
+                              tooltip: value.isPlaying ? 'Pause' : 'Play',
+                              iconSize: NotionSize.touchTarget,
+                              color: NotionMediaColors.onScrim,
+                              onPressed: value.hasError
+                                  ? null
+                                  : () {
+                                      unawaited(_toggle());
+                                      _revealControls();
+                                    },
+                              icon: NotionMorphSwitcher(
+                                child: Icon(
+                                  value.isPlaying
+                                      ? Icons.pause
+                                      : Icons.play_arrow,
+                                  key: ValueKey(value.isPlaying),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          left: NotionSpace.inset,
+                          right: NotionSpace.inset,
+                          bottom: padding.bottom + NotionSpace.md,
+                          child: Center(
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxWidth: NotionSize.dialogMaxWidth,
+                              ),
+                              child: NotionGlassPanel(
+                                key: const ValueKey('viewer-video-controls'),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: NotionSpace.xs,
+                                ),
+                                child: NotionMediaPlaybackControls(
+                                  playing: value.isPlaying,
+                                  position: value.position,
+                                  duration: value.duration,
+                                  speed: value.playbackSpeed,
+                                  onToggle: value.hasError ? null : _toggle,
+                                  onSeek: value.hasError ? null : _seek,
+                                  onSpeedCycle: value.hasError
+                                      ? null
+                                      : () => _setSpeed(
+                                          RoundVideoView.nextSpeed(
+                                            value.playbackSpeed,
+                                          ),
+                                        ),
+                                  onSpeedPicker: value.hasError
+                                      ? null
+                                      : () => showRoundSpeedPicker(
+                                          context,
+                                          speed: value.playbackSpeed,
+                                          onChanged: _setSpeed,
+                                        ),
+                                  trailing: IconButton(
+                                    key: const ValueKey('viewer-reel-mute'),
+                                    tooltip: value.volume > 0
+                                        ? 'Mute'
+                                        : 'Unmute',
+                                    color: NotionMediaColors.onScrim,
+                                    onPressed: value.hasError
+                                        ? null
+                                        : _toggleMute,
+                                    icon: Icon(
+                                      value.volume > 0
+                                          ? Icons.volume_up_outlined
+                                          : Icons.volume_off_outlined,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
 
   /// The video over its transport; with a [shown] transcript the video gets
   /// smaller, the transcript follows playback between them (Apple Music

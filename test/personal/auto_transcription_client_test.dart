@@ -576,48 +576,32 @@ void main() {
   });
 
   test(
-    'Instagram reels are offered on demand, never requested automatically',
+    'Instagram reels are never transcribed, automatically or on demand',
     () async {
+      // J (2026-11-18), superseding on-demand reels (2026-10-20).
       final shared = reel(cloud, r'$reel');
-      expect(
-        PersonalClient.autoTranscriptionKind(shared),
-        AutoTranscriptionKind.reel,
-      );
-      // A worker that refuses videos refuses reels too.
-      expect(personal.transcribableKind(shared), isNull);
-      personal.workerReadiness = heartbeat('scan', media: 2);
-      expect(personal.transcribableKind(shared), AutoTranscriptionKind.reel);
-      expect(personal.workerSeparatesReels, isFalse);
-      expect(
-        personal.autoTranscriptionBlockFor(shared, DateTime.now()),
-        'kind_disabled',
-      );
-      expect(personal.autoTranscriptPending(shared), isFalse);
-      await flushTimers();
-      expect(personal.requests, isEmpty, reason: 'no automatic request');
-      // Other Instagram videos keep the video policy.
-      expect(personal.autoTranscriptPending(video(cloud, r'$clip')), isTrue);
-      await flushTimers();
-      expect(personal.requests.single.payload['origin'], 'auto');
-      // On demand, a reel is requested like any other media.
-      await personal.transcribe(shared);
-      final manual = personal.requests.singleWhere(
-        (op) => op.entityId == personal.transcriptId(shared),
-      );
-      expect(manual.payload.containsKey('origin'), isFalse);
-      // Switched on, reels are automatic as well.
+      expect(PersonalClient.autoTranscriptionKind(shared), isNull);
       personal.workerReadiness = heartbeat('scan', media: 3);
-      expect(personal.workerSeparatesReels, isTrue);
+      expect(personal.transcribableKind(shared), isNull);
+      // Even a stale synced reel switch changes nothing.
       await personal.setTranscriptionPolicy(
         TranscriptionPolicy.defaults.withKind(AutoTranscriptionKind.reel, true),
       );
       expect(
-        personal.autoTranscriptionBlockFor(
-          reel(cloud, r'$reel2'),
-          DateTime.now(),
-        ),
-        isNull,
+        personal.autoTranscriptionBlockFor(shared, DateTime.now()),
+        'unsupported',
       );
+      expect(personal.autoTranscriptPending(shared), isFalse);
+      await expectLater(personal.transcribe(shared), throwsStateError);
+      await flushTimers();
+      expect(
+        personal.requests.where(
+          (op) => op.entityId == personal.transcriptId(shared),
+        ),
+        isEmpty,
+      );
+      // Other Instagram videos keep the video policy.
+      expect(personal.autoTranscriptPending(video(cloud, r'$clip')), isTrue);
     },
   );
 
@@ -644,17 +628,17 @@ void main() {
         );
         expect(
           PersonalClient.autoTranscriptionKind(shared),
-          AutoTranscriptionKind.reel,
+          isNull,
           reason: url,
         );
         expect(
           personal.autoTranscriptionBlockFor(shared, DateTime.now()),
-          'kind_disabled',
+          'unsupported',
           reason: url,
         );
         expect(personal.autoTranscriptPending(shared), isFalse, reason: url);
-        // Still offered on demand.
-        expect(personal.transcribableKind(shared), AutoTranscriptionKind.reel);
+        // Not offered on demand either.
+        expect(personal.transcribableKind(shared), isNull);
       }
       await flushTimers();
       expect(personal.requests, isEmpty, reason: 'no automatic request');
@@ -1240,59 +1224,29 @@ void main() {
       expect(find.text('Other'), findsOneWidget);
     });
 
-    testWidgets('Instagram reels are on demand and say so', (tester) async {
+    testWidgets('shared reels have no switch and say they are never '
+        'transcribed', (tester) async {
       final personal = await fakeZonePersonal();
-      personal.workerReadiness = heartbeat('scan', media: 2);
-      final runs = <Future<void>>[];
+      personal.workerReadiness = heartbeat('scan', media: 3);
       await mount(
         tester,
-        ListenableBuilder(
-          listenable: personal,
-          builder: (context, _) => TranscriptionSettingsSection(
-            personal: personal,
-            run: (action) {
-              final future = action();
-              runs.add(future);
-              return future;
-            },
-          ),
-        ),
+        TranscriptionSettingsSection(personal: personal, run: (a) => a()),
       );
-      NotionSettingsToggle reels() => tester.widget<NotionSettingsToggle>(
+      expect(
         find.byKey(const ValueKey('transcription-kind-reel')),
+        findsNothing,
       );
-      expect(find.text('Shared reels'), findsOneWidget);
-      expect(reels().value, isFalse);
+      expect(find.text('Shared reels'), findsNothing);
       expect(
-        reels().subtitle,
-        'On demand · tap Transcribe under a reel · until the background '
-        'service is updated, reels follow Videos',
-      );
-      expect(
-        find.textContaining('Shared reels only when you tap Transcribe'),
+        find.textContaining(
+          'shared from Instagram or Facebook are never transcribed',
+        ),
         findsOneWidget,
       );
-      personal.workerReadiness = heartbeat('scan', media: 3);
-      personal.notifyListeners();
-      await tester.pump();
       expect(
-        reels().subtitle,
-        'On demand · tap Transcribe under a reel · '
-        'Reels, posts and stories shared from Instagram or Facebook',
+        find.byKey(const ValueKey('transcription-kind-video')),
+        findsOneWidget,
       );
-      await tester.tap(find.byKey(const ValueKey('transcription-kind-reel')));
-      await tester.pumpAndSettle();
-      await Future.wait(runs);
-      await tester.pump();
-      expect(
-        personal.transcriptionPolicy.kindEnabled(AutoTranscriptionKind.reel),
-        isTrue,
-      );
-      expect(
-        personal.transcriptionPolicy.kindEnabled(AutoTranscriptionKind.video),
-        isTrue,
-      );
-      expect(reels().subtitle, startsWith('Automatic'));
     });
 
     test('usage costs use cents and never round small spend to zero', () {

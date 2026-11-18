@@ -7,6 +7,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/personal/shared_reel.dart';
 import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/file_description.dart';
@@ -42,6 +43,14 @@ class EventVideoPlayer extends StatelessWidget {
 
   static const String fallbackBlurHash = 'L5H2EC=PM+yV0g-mq.wG9c010J}I';
 
+  /// In-chat frame of a shared reel: the bubble's media width (so it
+  /// lines up with other media), 9:16 tall up to the bubble's height limit.
+  static Size reelFrame({required double maxWidth, required double maxHeight}) {
+    final width = ConversationMedia.frame(maxWidth: maxWidth).width;
+    final height = width * 16 / 9;
+    return Size(width, height < maxHeight ? height : maxHeight);
+  }
+
   @override
   Widget build(BuildContext context) {
     final supportsVideoPlayer = PlatformInfos.supportsVideoPlayer;
@@ -73,14 +82,18 @@ class EventVideoPlayer extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final maxHeight = ConversationMedia.maxHeightOf(context, constraints);
         // Same rule as images: the bubble's media width, aspect kept within
-        // limits, tall reels cropped instead of narrowed.
-        final frame = ConversationMedia.frame(
-          maxWidth: constraints.maxWidth,
-          width: infoMap?.tryGet<int>('w'),
-          height: infoMap?.tryGet<int>('h'),
-          maxHeight: ConversationMedia.maxHeightOf(context, constraints),
-        );
+        // limits. A shared reel keeps the width but stands up to 9:16
+        // instead of being cropped to the widest bubble aspect.
+        final frame = isSharedReel(event)
+            ? reelFrame(maxWidth: constraints.maxWidth, maxHeight: maxHeight)
+            : ConversationMedia.frame(
+                maxWidth: constraints.maxWidth,
+                width: infoMap?.tryGet<int>('w'),
+                height: infoMap?.tryGet<int>('h'),
+                maxHeight: maxHeight,
+              );
         final width = frame.width;
         final height = frame.height;
         return Column(

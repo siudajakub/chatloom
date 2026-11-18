@@ -73,10 +73,6 @@ class WorkerEngine {
   /// Off by default: the synced user policy alone never starts a scan.
   final bool autoTranscription;
 
-  /// Shared reels need operator approval as well as the synced per-kind
-  /// switch. Off by default, including policies saved by older clients.
-  final bool autoTranscriptionReels;
-
   /// Round-robin source audit over every transcript job (redaction
   /// detection): [sourceAuditBatch] probes at most this often.
   static const sourceAuditInterval = Duration(seconds: 30);
@@ -158,7 +154,6 @@ class WorkerEngine {
     this.recentSources,
     this.liveSources,
     this.autoTranscription = false,
-    this.autoTranscriptionReels = false,
     this.maxConcurrentTranscripts = 2,
     ConversationSummarizer? summarizer,
     this.gister,
@@ -1312,10 +1307,14 @@ class WorkerEngine {
         _setState(job, 'cancelled', 'auto_disabled');
         return;
       }
-      if (automatic &&
-          _jobKind(job) == AutoTranscriptionKind.reel &&
-          !autoPolicy().kindEnabled(AutoTranscriptionKind.reel)) {
-        _setState(job, 'cancelled', 'auto_skipped_kind');
+      // Shared reels are never transcribed (J, 2026-11-18), not even on
+      // request; a job queued by an older worker or client stops here.
+      if (_jobKind(job) == AutoTranscriptionKind.reel) {
+        _setState(
+          job,
+          automatic ? 'cancelled' : 'failed',
+          automatic ? 'auto_skipped_kind' : 'not_audio',
+        );
         return;
       }
       _cancellations[id] = cancel;
@@ -1796,18 +1795,16 @@ class WorkerEngine {
     return null;
   }
 
-  /// Current effective policy, constrained by the operator's reel switch.
-  /// Absent or deleted = defaults (automatic on); unreadable = disabled.
-  /// The synced policy is preserved; a stale client cannot re-enable reels
-  /// against the operator's setting. Every scan and pre-upload gate uses it.
+  /// Current effective policy. Absent or deleted = defaults (automatic on);
+  /// unreadable = disabled. Shared reels are always off (J, 2026-11-18): a
+  /// stale client's synced reel switch is preserved but never honoured.
+  /// Every scan and pre-upload gate uses it.
   TranscriptionPolicy autoPolicy() {
     final stored = store.metadata(transcriptionPolicyEntity);
     final policy = stored == null || stored['deleted'] == true
         ? TranscriptionPolicy.defaults
         : TranscriptionPolicy.fromValue(stored['value']);
-    return autoTranscriptionReels
-        ? policy
-        : policy.withKind(AutoTranscriptionKind.reel, false);
+    return policy.withKind(AutoTranscriptionKind.reel, false);
   }
 
   /// Estimated cost of automatic jobs created within the rolling window,
@@ -1907,8 +1904,6 @@ class WorkerEngine {
             ? enabledAt
             : windowStart,
         limit: autoScanPageLimit,
-        // Reels (on demand by default) are only listed when wanted.
-        reels: policy.kindEnabled(AutoTranscriptionKind.reel),
       );
     } catch (_) {
       // Source unavailable or malformed: keep the cursor, retry later, and

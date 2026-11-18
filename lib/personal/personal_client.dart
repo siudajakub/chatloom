@@ -1638,13 +1638,6 @@ class PersonalClient extends ChangeNotifier {
   bool get workerTranscribesAllMedia =>
       (workerReadiness?.transcriptionMedia ?? 0) >= 2;
 
-  /// True when the worker treats shared reels as their own kind
-  /// (heartbeat `transcriptionMedia` >= 3) and so honours the reel switch.
-  /// A worker reporting 2 transcribes a reel automatically like any video
-  /// while videos are on; on demand it transcribes reels either way.
-  bool get workerSeparatesReels =>
-      (workerReadiness?.transcriptionMedia ?? 0) >= 3;
-
   /// The kind of [e] the paired worker can transcribe, or null. Panels use
   /// it to decide whether to offer transcription at all.
   AutoTranscriptionKind? transcribableKind(Event e) {

@@ -625,16 +625,18 @@ def reel_message(**change):
 
 
 class LocalReelPolicyTests(unittest.TestCase):
-    """J (2026-10-20): Instagram reels are transcribed only on demand."""
+    """J (2026-11-18): shared Instagram/Facebook reels, posts and stories are
+    never transcribed, automatically or on demand (supersedes 2026-10-20)."""
 
-    def test_instagram_shares_are_reels(self):
+    def test_instagram_shares_are_never_exported(self):
         for text in ('https://www.instagram.com/reel/Cfixture/?igsh=x',
                      'Caption\nhttps://instagram.com/p/Cfixture/',
                      'https://www.instagram.com/fixture/reel/Cfixture/',
                      'https://www.instagram.com/stories/fixture/123/',
                      'http://instagr.am/tv/Cfixture'):
             with self.subTest(text=text):
-                self.assertEqual(sources.exportable_media(reel_message(text=text))[1], 'reel')
+                self.assertTrue(sources.instagram_share(reel_message(text=text)))
+                self.assertEqual(sources.exportable_media(reel_message(text=text)), (None, None))
         # The bridge's external_url, wherever the index model keeps it.
         for place in ('top', 'extra', 'attachment'):
             with self.subTest(place=place):
@@ -646,7 +648,8 @@ class LocalReelPolicyTests(unittest.TestCase):
                     message['extra'] = {'externalURL': url}
                 else:
                     message['attachments'][0]['externalUrl'] = url
-                self.assertEqual(sources.exportable_media(message)[1], 'reel')
+                self.assertTrue(sources.instagram_share(message))
+                self.assertEqual(sources.exportable_media(message), (None, None))
 
     def test_other_videos_are_not_reels(self):
         # Recorded and sent in an Instagram chat: no shared link.
@@ -667,7 +670,7 @@ class LocalReelPolicyTests(unittest.TestCase):
             attachments=[{**reel_message()['attachments'][0], 'isGif': True}])), (None, None))
         self.assertEqual(sources.exportable_media(reel_message(extra={'view_once': True})), (None, None))
 
-    def test_facebook_shares_are_reels(self):
+    def test_facebook_shares_are_never_exported(self):
         """2026-10-26: a Facebook reel shared on Messenger was
         listed as an ordinary video and transcribed automatically."""
         for url in ('https://www.facebook.com/reel/1234567890', 'https://fb.watch/fixture/',
@@ -676,11 +679,13 @@ class LocalReelPolicyTests(unittest.TestCase):
             with self.subTest(url=url):
                 message = video_message()
                 message['external_url'] = url
-                self.assertEqual(sources.exportable_media(message)[1], 'reel')
+                self.assertTrue(sources.instagram_share(message))
+                self.assertEqual(sources.exportable_media(message), (None, None))
         # The bridge's share title/caption keys mark a share without a URL.
         message = video_message()
         message['extra'] = {'com.beeper.meta.full_post_title': ''}
-        self.assertEqual(sources.exportable_media(message)[1], 'reel')
+        self.assertTrue(sources.instagram_share(message))
+        self.assertEqual(sources.exportable_media(message), (None, None))
         # The caption mautrix-meta writes in a Messenger chat.
         for text in ('Funny\n\nhttps://www.facebook.com/reel/1234567890',
                      'https://fb.watch/fixture/', 'https://www.facebook.com/share/r/x/',
@@ -688,8 +693,9 @@ class LocalReelPolicyTests(unittest.TestCase):
             with self.subTest(text=text):
                 message = video_message()
                 message.update(accountID='local-facebookgo_ba_fixture', text=text)
-                self.assertEqual(sources.exportable_media(message)[1], 'reel')
-        # Never listed for a worker that asks only for ordinary videos.
+                self.assertTrue(sources.instagram_share(message))
+                self.assertEqual(sources.exportable_media(message), (None, None))
+        # Not for a worker that asks only for ordinary videos either.
         message = video_message()
         message['external_url'] = 'https://www.facebook.com/reel/1234567890'
         self.assertEqual(sources.exportable_media(message, kinds=('voice', 'round', 'video', 'audio')),
@@ -702,14 +708,13 @@ class LocalReelPolicyTests(unittest.TestCase):
         self.assertEqual(sources.exportable_media(plain)[1], 'video')
         self.assertEqual(sources.exportable_media(round_message())[1], 'round')
 
-    def test_reels_are_exported_only_for_workers_that_ask(self):
-        everything_but_reels = ('voice', 'round', 'video', 'audio')
-        self.assertEqual(sources.exportable_media(reel_message(), kinds=everything_but_reels), (None, None))
-        self.assertEqual(sources.exportable_media(reel_message(), kinds=sources.LEGACY_KINDS), (None, None))
-        self.assertEqual(sources.exportable_media(reel_message(), kinds=('reel',))[1], 'reel')
+    def test_reels_are_never_exported_whatever_the_worker_asks(self):
+        for kinds in (sources.KINDS, ('voice', 'round', 'video', 'audio'), sources.LEGACY_KINDS, ('reel',)):
+            with self.subTest(kinds=kinds):
+                self.assertEqual(sources.exportable_media(reel_message(), kinds=kinds), (None, None))
         self.assertEqual(sources.exportable_media(video_message(), kinds=('reel',)), (None, None))
 
-    def test_selected_reel_is_a_video_with_the_reel_flag(self):
+    def test_selected_reel_is_not_transcribable(self):
         with tempfile.TemporaryDirectory() as directory:
             index = Path(directory) / 'index.db'
             canonical = reel_message()
@@ -728,8 +733,7 @@ class LocalReelPolicyTests(unittest.TestCase):
             with patch.object(sources, 'INDEX', index), patch.object(sources, 'BeeperAPI') as client:
                 client.return_value.request.side_effect = api
                 _, attachment = sources.selected_source(source)
-            self.assertEqual(attachment['_kind'], 'video')
-            self.assertTrue(attachment['_reel'])
+            self.assertIsNone(attachment)
 
 
 class LocalRecentTests(unittest.TestCase):
@@ -801,7 +805,7 @@ class LocalRecentTests(unittest.TestCase):
                 with self.assertRaises(sources.SourceFailure):
                     self.recent(cursor=11, kinds=kinds)
 
-    def test_reels_are_listed_only_when_the_worker_asks(self):
+    def test_reels_are_never_listed(self):
         reel = {**reel_message(), 'isSender': False, 'senderID': '@ghost:beeper.local',
                 'timestamp': '2026-10-17T12:00:03.000Z'}
         with closing(sqlite3.connect(self.index)) as db, db:
@@ -810,8 +814,7 @@ class LocalRecentTests(unittest.TestCase):
         page = self.recent(cursor=11, limit=10, kinds=['voice', 'round', 'video', 'audio'])
         self.assertEqual(page, {'cursor': 14, 'items': []})
         page = self.recent(cursor=11, limit=10, kinds=['voice', 'round', 'video', 'audio', 'reel'])
-        self.assertEqual([(i['eventId'], i['kind'], i['network']) for i in page['items']],
-                         [('$reel', 'reel', 'instagram')])
+        self.assertEqual(page, {'cursor': 14, 'items': []})
 
     def test_null_cursor_returns_current_end_without_history(self):
         self.assertEqual(self.recent(cursor=None), {'cursor': 11, 'items': []})
@@ -946,15 +949,11 @@ class LocalRoundHTTPTests(unittest.TestCase):
         status, _, data = self.serve(attachment, b'webm fixture' * 10, 'audio')
         self.assertEqual((status, data), (200, b'webm fixture' * 10))
 
-    def test_reel_metadata_is_a_video_with_the_reel_flag(self):
+    def test_metadata_never_carries_a_reel_flag(self):
         attachment = {'id': 'clip', 'mimeType': 'video/mp4', 'fileSize': 5000, 'duration': 30,
                       '_kind': 'video', '_reel': True}
         status, _, data = self.serve(attachment, b'', 'metadata')
         self.assertEqual(status, 200)
-        metadata = json.loads(data)
-        self.assertEqual((metadata['kind'], metadata['reel'], metadata['transcriptionAllowed']),
-                         ('video', True, True))
-        status, _, data = self.serve({**attachment, '_reel': False}, b'', 'metadata')
         self.assertNotIn('reel', json.loads(data))
 
     def test_round_file_above_round_cap_is_refused(self):

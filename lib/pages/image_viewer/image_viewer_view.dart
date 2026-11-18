@@ -12,9 +12,11 @@ import 'package:chatloom/pages/image_viewer/progressive_photo.dart';
 import 'package:chatloom/pages/image_viewer/video_player.dart';
 import 'package:chatloom/personal/media/media_export_actions.dart';
 import 'package:chatloom/personal/round_video/telegram_round_service.dart';
+import 'package:chatloom/personal/shared_reel.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
+import 'package:chatloom/utils/url_launcher.dart';
 import 'package:chatloom/widgets/hover_builder.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
@@ -247,8 +249,20 @@ class ImageViewerView extends StatelessWidget {
         (!round ||
             TelegramRoundService.of(event.room.client).canNativeForward(event));
     final canExport = controller.canExport(event);
+    final reelLink = sharedReelLink(event);
     return NotionMediaActionsButton(
       actions: [
+        // A shared reel's link lives here instead of under the player.
+        if (reelLink != null)
+          NotionMediaAction(
+            label: reelLink.host.contains('instagram') ||
+                    reelLink.host.contains('instagr.am')
+                ? 'Open in Instagram'
+                : 'Open original post',
+            icon: Icons.open_in_new,
+            onPressed: () =>
+                UrlLauncher(context, reelLink.toString()).launchUrl(),
+          ),
         NotionMediaAction(
           label: round ? 'Forward in Telegram' : 'Forward',
           icon: Icons.forward_outlined,

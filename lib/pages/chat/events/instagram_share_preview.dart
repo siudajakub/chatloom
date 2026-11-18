@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/image_bubble.dart';
 import 'package:chatloom/pages/chat/events/video_player.dart';
@@ -127,56 +128,111 @@ class _InstagramSharePreviewState extends State<InstagramSharePreview> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      if (_assets.isEmpty)
-        Padding(
-          padding: NotionBubble.padding,
-          child: NotionButton.ghost(
-            label: _failed
-                ? 'Retry Instagram media'
-                : widget.share.reel
-                ? 'Download reel'
-                : 'Download Instagram media',
-            busy: _busy,
-            onPressed: widget.event == null ? null : _open,
-          ),
-        ),
-      if (_failed)
-        const Padding(
-          padding: NotionBubble.padding,
-          child: Text(
-            'Instagram media unavailable. Check access to this post.',
-          ),
-        ),
-      if (_assets.isNotEmpty)
-        ConversationMessageChromeTap(
-          child: NotionTapTarget(
-            onTap: () =>
-                showImageViewer(context, _assets.first, mediaEvents: _assets),
-            child: AbsorbPointer(
-              child: _assets.first.messageType == MessageTypes.Video
-                  ? EventVideoPlayer(_assets.first)
-                  : ImageBubble(_assets.first),
+  /// A shared reel before it is loaded: its vertical 9:16 frame with a
+  /// play button. Nothing is requested until the tap.
+  Widget _reelPlaceholder(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final frame = EventVideoPlayer.reelFrame(
+        maxWidth: constraints.maxWidth,
+        maxHeight: ConversationMedia.maxHeightOf(context, constraints),
+      );
+      return ConversationMessageChromeTap(
+        child: Material(
+          key: const ValueKey('instagram-reel-placeholder'),
+          color: context.notion.colors.surface,
+          borderRadius: NotionRadius.mdAll,
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: widget.event == null || _busy ? null : _open,
+            child: SizedBox.fromSize(
+              size: frame,
+              child: Center(
+                child: _busy
+                    ? const NotionDelayedSpinner()
+                    : Semantics(
+                        button: true,
+                        label: _failed ? 'Retry reel' : 'Play reel',
+                        child: const DecoratedBox(
+                          decoration: ShapeDecoration(
+                            color: NotionMediaColors.scrim,
+                            shape: CircleBorder(),
+                          ),
+                          child: Padding(
+                            padding: EdgeInsets.all(NotionSpace.sm),
+                            child: Icon(
+                              Icons.play_arrow_outlined,
+                              color: NotionMediaColors.onScrim,
+                              size: NotionSize.iconLg,
+                            ),
+                          ),
+                        ),
+                      ),
+              ),
             ),
           ),
         ),
-      if (_assets.length > 1)
-        Padding(
-          padding: NotionBubble.padding,
-          child: Text('${_assets.length} items · tap to view album'),
-        ),
-      Padding(
-        padding: NotionBubble.padding,
-        child: NotionButton.ghost(
-          label: 'Open in Instagram',
-          onPressed: () =>
-              UrlLauncher(context, widget.share.url.toString()).launchUrl(),
-        ),
-      ),
-    ],
+      );
+    },
   );
+
+  @override
+  Widget build(BuildContext context) {
+    final reel = widget.share.reel;
+    final video =
+        _assets.isNotEmpty && _assets.first.messageType == MessageTypes.Video;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_assets.isEmpty && reel)
+          _reelPlaceholder(context)
+        else if (_assets.isEmpty)
+          Padding(
+            padding: NotionBubble.padding,
+            child: NotionButton.ghost(
+              label: _failed
+                  ? 'Retry Instagram media'
+                  : 'Download Instagram media',
+              busy: _busy,
+              onPressed: widget.event == null ? null : _open,
+            ),
+          ),
+        if (_failed)
+          const Padding(
+            padding: NotionBubble.padding,
+            child: Text(
+              'Instagram media unavailable. Check access to this post.',
+            ),
+          ),
+        if (_assets.isNotEmpty)
+          ConversationMessageChromeTap(
+            child: NotionTapTarget(
+              onTap: () =>
+                  showImageViewer(context, _assets.first, mediaEvents: _assets),
+              child: AbsorbPointer(
+                child: video
+                    ? EventVideoPlayer(_assets.first)
+                    : ImageBubble(_assets.first),
+              ),
+            ),
+          ),
+        if (_assets.length > 1)
+          Padding(
+            padding: NotionBubble.padding,
+            child: Text('${_assets.length} items · tap to view album'),
+          ),
+        // A loaded video keeps its link in the player's menu; posts,
+        // stories and anything not loaded keep the button here.
+        if (!video)
+          Padding(
+            padding: NotionBubble.padding,
+            child: NotionButton.ghost(
+              label: 'Open in Instagram',
+              onPressed: () =>
+                  UrlLauncher(context, widget.share.url.toString()).launchUrl(),
+            ),
+          ),
+      ],
+    );
+  }
 }

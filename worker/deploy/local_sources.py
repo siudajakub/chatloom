@@ -42,13 +42,12 @@ ROUND_MAX_SIDE = 640
 ROUND_SQUARE_TOLERANCE = 2
 # Media kinds. `video` and `audio` are only listed by /recent when the
 # worker asks for them (`kinds`), so a worker that predates them never
-# receives an item kind it would refuse as an invalid page. `reel` (a video
-# shared from Instagram or Facebook) is listed only when asked for, too: J
-# wants reels transcribed on demand (2026-10-20, Facebook 2026-10-26), so a
-# worker that does not ask (every
-# worker before the reel switch, or one with the switch off) never starts
-# automatic work for them. Selected-source metadata keeps `kind: video` for
-# a reel and adds `reel: true`, which older workers ignore.
+# receives an item kind it would refuse as an invalid page. A video shared
+# from Instagram or Facebook (a reel, post or story) is never transcribed,
+# automatically or on demand (J, 2026-11-18, superseding on-demand reels of
+# 2026-10-20): it is never listed and never exported, whatever the worker
+# asks. `reel` stays accepted in `kinds` so a worker that still asks for it
+# keeps scanning; it simply matches nothing.
 KINDS = ('voice', 'round', 'video', 'audio', 'reel')
 LEGACY_KINDS = ('voice', 'round')
 # A shared Instagram post, reel or story. mautrix-meta adds the post's link as
@@ -458,8 +457,9 @@ def exportable_media(message, telegram=False, kinds=KINDS):
     if 'video' in kinds or 'reel' in kinds:
         video = ordinary_video(message)
         if video is not None:
-            kind = 'reel' if instagram_share(message) else 'video'
-            return (video, kind) if kind in kinds else (None, None)
+            if instagram_share(message):
+                return None, None
+            return (video, 'video') if 'video' in kinds else (None, None)
     if 'audio' in kinds:
         audio = ordinary_audio(message)
         if audio is not None:
@@ -510,12 +510,7 @@ def selected_source(source):
         if candidate is not None and round_flag(canonical, candidate) is None:
             pending = candidate
     if original is None and pending is None:
-        original, kind = exportable_media(canonical, telegram, ('video', 'audio', 'reel'))
-    # A reel is exported (on demand) like any video; the flag lets a worker
-    # that knows reels keep them out of automatic work.
-    reel = kind == 'reel'
-    if reel:
-        kind = 'video'
+        original, kind = exportable_media(canonical, telegram, ('video', 'audio'))
     # The public message API omits some behavior/timer fields. The canonical
     # stored model must approve export before the API is used to resolve bytes.
     if rows[0][2] or (original is None and pending is None):
@@ -544,15 +539,13 @@ def selected_source(source):
             # Not a round after all: an ordinary video, if the canonical
             # model allows that on its own (every restriction applies).
             video = ordinary_video(canonical)
-            if video is not None:
+            if video is not None and not instagram_share(canonical):
                 original, kind = video, 'video'
                 attachment = ordinary_video(message)
     if attachment is not None:
         if any(attachment.get(k) != original.get(k) for k in ('id', 'mimeType', 'fileSize')):
             raise SourceFailure()
         attachment = {**attachment, '_sourceAPI': api, '_kind': kind}
-        if reel:
-            attachment['_reel'] = True
     return message, attachment
 
 
@@ -692,8 +685,7 @@ class Handler(BaseHTTPRequestHandler):
                     # Declared values let the worker skip over-limit media
                     # before any export; its own measurement stays final.
                     'durationMs': _declared_duration(attachment),
-                    'fileSize': attachment.get('fileSize') if attachment else None,
-                    **({'reel': True} if attachment and attachment.get('_reel') else {})}).encode(),
+                    'fileSize': attachment.get('fileSize') if attachment else None}).encode(),
                     'application/json')
                 return
             if attachment is None:

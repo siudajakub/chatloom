@@ -598,14 +598,14 @@ void main() {
             ...media('m.video', info: {'mimetype': 'video/mp4'}),
             ...extra,
           };
-          expect(transcribableMediaKind(content), AutoTranscriptionKind.reel);
+          expect(transcribableMediaKind(content), isNull);
           expect(
             autoTranscriptionBlock(
               TranscriptionPolicy.defaults,
               candidate(kind: transcribableMediaKind(content)),
               now: now,
             ),
-            'kind_disabled',
+            'unsupported',
           );
           // A share caption never overrides a real recording's markers.
           expect(
@@ -658,10 +658,10 @@ void main() {
         },
       );
 
-      test('a video shared from Instagram is a reel', () {
+      test('a video shared from Instagram is never transcribable', () {
         expect(
           transcribableMediaKind(share('m.video')),
-          AutoTranscriptionKind.reel,
+          isNull,
         );
         for (final url in [
           'https://instagram.com/p/Cfixture/',
@@ -671,13 +671,13 @@ void main() {
         ]) {
           expect(
             transcribableMediaKind(share('m.video', url: url)),
-            AutoTranscriptionKind.reel,
+            isNull,
             reason: url,
           );
         }
         expect(
           transcribableMediaKind(share('m.file')),
-          AutoTranscriptionKind.reel,
+          isNull,
         );
         expect(isInstagramShare(share('m.video')), isTrue);
       });
@@ -731,7 +731,7 @@ void main() {
         );
       });
 
-      test('Facebook reels and posts shared on Messenger are reels', () {
+      test('Facebook reels and posts shared on Messenger are never transcribable', () {
         // The shape mautrix-meta's Messenger converter produces for a shared
         // reel (`xmaAttachmentToMatrix`): the post's media, the share URL
         // as `external_url` and as the body, the title/caption keys. Such a
@@ -765,7 +765,7 @@ void main() {
             expect(isMetaShare(content), isTrue, reason: url);
             expect(
               transcribableMediaKind(content),
-              AutoTranscriptionKind.reel,
+              isNull,
               reason: '$url title: $title',
             );
           }
@@ -773,12 +773,12 @@ void main() {
         // A share without an action URL still carries the title keys.
         expect(
           transcribableMediaKind(messengerShare(url: null)),
-          AutoTranscriptionKind.reel,
+          isNull,
         );
         // A video file shared the same way.
         expect(
           transcribableMediaKind({...messengerShare(), 'msgtype': 'm.file'}),
-          AutoTranscriptionKind.reel,
+          isNull,
         );
         // Never automatic under the default policy.
         const policy = TranscriptionPolicy.defaults;
@@ -788,7 +788,7 @@ void main() {
             candidate(kind: transcribableMediaKind(messengerShare())),
             now: now,
           ),
-          'kind_disabled',
+          'unsupported',
         );
         // A video recorded and sent on Messenger is not a share.
         expect(

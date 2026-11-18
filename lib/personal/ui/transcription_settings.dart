@@ -32,32 +32,17 @@ const transcriptionKindLabels = <AutoTranscriptionKind, (String, String)>{
     'Only the audio track is sent; clips without sound are skipped',
   ),
   AutoTranscriptionKind.audio: ('Other audio', 'Audio files and recordings'),
-  AutoTranscriptionKind.reel: (
-    'Shared reels',
-    'Reels, posts and stories shared from Instagram or Facebook',
-  ),
+  // No switch for shared reels: J (2026-11-18) never wants them transcribed.
 };
 
-/// Subtitle of a per-kind switch. Shared reels say plainly that they are
-/// transcribed on demand (J, 2026-10-20) and when the background service
-/// still treats them as ordinary videos.
+/// Subtitle of a per-kind switch.
 String transcriptionKindSubtitle(
   AutoTranscriptionKind kind,
   TranscriptionPolicy policy, {
   required bool workerOnline,
   required bool allMedia,
-  required bool separatesReels,
 }) {
   final base = transcriptionKindLabels[kind]!.$2;
-  if (kind == AutoTranscriptionKind.reel) {
-    final mode = policy.kindEnabled(kind)
-        ? 'Automatic'
-        : 'On demand · tap Transcribe under a reel';
-    final outdated = workerOnline && allMedia && !separatesReels;
-    return outdated
-        ? '$mode · until the background service is updated, reels follow Videos'
-        : '$mode · $base';
-  }
   if ((kind == AutoTranscriptionKind.video ||
           kind == AutoTranscriptionKind.audio) &&
       workerOnline &&
@@ -187,7 +172,7 @@ class TranscriptionSettingsSection extends StatelessWidget {
           title: 'Transcribe automatically',
           subtitle:
               'Voice messages, round videos and videos are transcribed on the server as soon as they arrive or you send them; only their audio is sent to OpenAI. Disappearing messages are never sent; muted and ignored chats are skipped.'
-              '${policy.kindEnabled(AutoTranscriptionKind.reel) ? '' : ' Shared reels only when you tap Transcribe.'}'
+              ' Reels, posts and stories shared from Instagram or Facebook are never transcribed.'
               '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the background service: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable
@@ -278,7 +263,6 @@ class TranscriptionSettingsSection extends StatelessWidget {
               policy,
               workerOnline: personal.workerOnline,
               allMedia: personal.workerTranscribesAllMedia,
-              separatesReels: personal.workerSeparatesReels,
             ),
             value: policy.kindEnabled(entry.key),
             onChanged: editable && policy.auto

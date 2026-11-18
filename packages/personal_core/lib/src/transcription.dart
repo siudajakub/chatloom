@@ -284,8 +284,9 @@ enum AutoTranscriptionKind {
   reel;
 
   /// Whether a policy without an explicit switch transcribes this kind
-  /// automatically. J (2026-10-20): Instagram reels only when asked;
-  /// (2026-10-26) Facebook reels and shared posts likewise.
+  /// automatically. [reel] stays only so synced policies keep parsing:
+  /// since 2026-11-18 shared reels are never transcribed at all (see
+  /// [transcribableMediaKind]).
   bool get automaticByDefault => this != AutoTranscriptionKind.reel;
 }
 
@@ -401,8 +402,8 @@ const _audioExtensions = {
 /// whose protective metadata forbids transcription (view-once, protected,
 /// disappearing). Shared by the app and the worker so both classify alike.
 /// Room-level disappearing settings are checked separately by the callers.
-/// A video shared from Instagram or Facebook ([isMetaShare]) is a `reel`,
-/// not a `video`.
+/// A video shared from Instagram or Facebook ([isMetaShare]) is never
+/// transcribable (J, 2026-11-18).
 AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
   final msgtype = content['msgtype'];
   if (msgtype is! String) return null;
@@ -443,16 +444,14 @@ AutoTranscriptionKind? transcribableMediaKind(Map<String, dynamic> content) {
         ? 'video/unknown'
         : '';
   }
+  // J (2026-11-18): reels, posts and stories shared from Instagram or
+  // Facebook are never transcribed, automatically or on demand.
   if (msgtype == 'm.video') {
     if (mime.startsWith('image/')) return null;
-    return isMetaShare(content)
-        ? AutoTranscriptionKind.reel
-        : AutoTranscriptionKind.video;
+    return isMetaShare(content) ? null : AutoTranscriptionKind.video;
   }
   if (mime.startsWith('video/')) {
-    return isMetaShare(content)
-        ? AutoTranscriptionKind.reel
-        : AutoTranscriptionKind.video;
+    return isMetaShare(content) ? null : AutoTranscriptionKind.video;
   }
   if (mime.startsWith('audio/')) return AutoTranscriptionKind.audio;
   return null;

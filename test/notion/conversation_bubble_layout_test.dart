@@ -412,7 +412,7 @@ void main() {
       );
     });
 
-    testWidgets('a reel fills the standard media width, cropped to 3:4', (
+    testWidgets('a reel fills the standard media width, standing up to 9:16', (
       tester,
     ) async {
       await pumpMedia(tester, media(reel()));
@@ -426,10 +426,8 @@ void main() {
             .first,
       );
       expect(frame.width, closeTo(standard, .01));
-      expect(
-        frame.height,
-        closeTo(standard * NotionBubble.mediaMaxAspect, .01),
-      );
+      expect(frame.height, greaterThan(standard * NotionBubble.mediaMaxAspect));
+      expect(frame.height, lessThanOrEqualTo(standard * 16 / 9 + .01));
       // The bubble is the frame's width: the caption sits inside it.
       expect(tester.getRect(_fill('media')).width, closeTo(standard, .01));
       expect(

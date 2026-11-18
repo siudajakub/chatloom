@@ -165,7 +165,6 @@ Future<void> main(List<String> arguments) async {
         recentSources: transport is LocalSourceTransport ? transport : null,
         liveSources: liveSources,
         autoTranscription: config.autoTranscription,
-        autoTranscriptionReels: config.autoTranscriptionReels,
         summarizer: OpenRouterConversationSummarizer(
           openRouterApiKey(config, credentials),
         ),
@@ -201,7 +200,7 @@ Future<void> main(List<String> arguments) async {
             'timing ${config.transcriptionTimingModel?.name ?? 'none'}, '
             'key ${transcriptionKey.isEmpty ? 'missing' : 'present'}, '
             'automatic ${config.autoTranscription ? 'on' : 'off'}, '
-            'reels ${config.autoTranscriptionReels ? 'allowed' : 'off'}';
+            'reels never';
         if (arguments[0] == 'check') {
           stdout.writeln('Worker check: $transcription');
           stdout.writeln(
@@ -341,7 +340,7 @@ Future<void> main(List<String> arguments) async {
                 'autoTranscription': engine.autoScanActive ? 'scan' : 'off',
                 // Worker capabilities for app-side gating: media kinds 2 =
                 // voice, round, any video and audio (also as files); 3 = also
-                // shared reels as their own kind (on demand by default);
+                // shared reels told apart and never transcribed;
                 // live = cloud rooms are picked up from the worker's own sync.
                 'transcriptionMedia': 3,
                 'autoTranscriptionLive': engine.liveScanActive,
