@@ -14,6 +14,8 @@ import 'package:chatloom/pages/chat/voice_record_button.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/summary/summary_history.dart';
+import 'package:chatloom/personal/ui/call_history_card.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -222,6 +224,86 @@ void main() {
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
     await AppSettings.init(loadWebConfigFile: false);
+  });
+
+  testWidgets('call history shows the result between messages in both chats', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(360, 780));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final client = ConversationClient();
+    final rooms = _fixture(client);
+    final call = rooms.a.message(
+      r'$call',
+      'Video call ended',
+      minute: 43,
+      content: {
+        'msgtype': MessageTypes.Text,
+        'body': 'Video call ended',
+        'com.beeper.action_message': {'type': 'call', 'call_type': 'video'},
+        'com.chatloom.call': {
+          'call_type': 'video',
+          'status': 'ended',
+          'direction': 'incoming',
+          'duration_seconds': 127,
+        },
+      },
+    );
+    rooms.a.message(r'$after', 'Message after the call', minute: 44);
+    final timeline = await rooms.a.getTimeline();
+    expect(
+      MatrixSummaryHistorySource.project(
+        call,
+        timeline: timeline,
+        sender: 'Anna',
+      ),
+      isNull,
+    );
+    final host = _OrdinaryHost(rooms.a, timeline, r'$read');
+    addTearDown(() {
+      timeline.cancelSubscriptions();
+      host.sendController.dispose();
+      host.inputFocus.dispose();
+      host.scrollController.dispose();
+    });
+    await _mount(
+      tester,
+      Scaffold(body: ChatEventList(controller: host)),
+      client,
+    );
+    final card = find.byType(CallHistoryCard);
+    final time = call.originServerTs.localizedTimeOfDay(tester.element(card));
+    expect(find.text(time), findsOneWidget);
+    expect(find.text('Video call'), findsOneWidget);
+    expect(find.text('Incoming · Ended · 2:07'), findsOneWidget);
+    expect(find.byIcon(Icons.videocam_outlined), findsOneWidget);
+    final callY = tester.getCenter(card).dy;
+    expect(
+      callY,
+      greaterThan(tester.getCenter(find.text('Unread fictional message')).dy),
+    );
+    expect(
+      callY,
+      lessThan(tester.getCenter(find.text('Message after the call')).dy),
+    );
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    tester.platformDispatcher.clearTextScaleFactorTestValue();
+    final personal = ConversationPersonal(client);
+    await _mount(
+      tester,
+      MergedChatPage(
+        personal: personal,
+        group: _group(personal, rooms.a, rooms.b),
+      ),
+      client,
+    );
+    expect(find.text('via WhatsApp · $time'), findsOneWidget);
+    expect(find.text('Incoming · Ended · 2:07'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('ordinary and merged chats render the same timeline features', (

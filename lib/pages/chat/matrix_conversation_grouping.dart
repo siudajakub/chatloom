@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:matrix/matrix.dart';
 import 'conversation_grouping.dart';
 
@@ -18,7 +19,10 @@ ConversationGroupingItem conversationGroupingItem(
         : null,
     deliveryState: event.status.isSent ? 'sent' : event.status.name,
     boundary:
-        boundary || event.redacted || !_groupedEventTypes.contains(event.type),
+        boundary ||
+        event.redacted ||
+        !_groupedEventTypes.contains(event.type) ||
+        bridgeCallNotice(event) != null,
     startsSeries: event.inReplyToEventId(includingFallback: false) != null,
   );
 }

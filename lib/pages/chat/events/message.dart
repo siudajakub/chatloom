@@ -28,6 +28,7 @@ import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/bridge_notice_line.dart';
+import 'package:chatloom/personal/ui/call_history_card.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
@@ -182,11 +183,25 @@ class Message extends StatelessWidget {
     if (event.messageType == EventTypes.KeyVerificationRequest) {
       return StateMessage(event);
     }
-    // A bridge's own notice is a service line, not the contact's bubble
-    // (BR-08). Only notices pay for the display-event lookup.
-    if (event.messageType == MessageTypes.Notice) {
-      final notice = bridgeServiceNotice(event.getDisplayEvent(timeline));
-      if (notice != null) return BridgeNoticeLine(notice: notice);
+    final display = event.getDisplayEvent(timeline);
+    final notice = bridgeServiceNotice(display);
+    if (notice is BridgeCallNotice && notice.network != 'Slack') {
+      return CallHistoryCard(
+        call: notice,
+        time: event.originServerTs.localizedTimeOfDay(context),
+        source: sourceLabel,
+      );
+    }
+    if (notice != null) {
+      return BridgeNoticeLine(
+        notice: notice,
+        detail: notice.isCall
+            ? [
+                ?sourceLabel,
+                event.originServerTs.localizedTimeOfDay(context),
+              ].join(' · ')
+            : null,
+      );
     }
     final own = event.senderId == event.room.client.userID;
     final boundary = seriesBoundary;
@@ -219,7 +234,6 @@ class Message extends StatelessWidget {
     final last =
         position == ConversationGroupPosition.single ||
         position == ConversationGroupPosition.last;
-    final display = event.getDisplayEvent(timeline);
     // Rounds render without a fill, so their text sits on the page.
     final round = MessageContent.rendersRound(display);
     final chatTheme = (roomPalette ?? resolveRoomPalette(event.room)).theme;

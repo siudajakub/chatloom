@@ -8,7 +8,8 @@ import 'package:material_ui/material_ui.dart';
 /// text, a leading glyph. It never looks like the contact wrote it.
 class BridgeNoticeLine extends StatelessWidget {
   final BridgeServiceNotice notice;
-  const BridgeNoticeLine({super.key, required this.notice});
+  final String? detail;
+  const BridgeNoticeLine({super.key, required this.notice, this.detail});
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +42,7 @@ class BridgeNoticeLine extends StatelessWidget {
                 const SizedBox(width: NotionSpace.xxs),
                 Flexible(
                   child: Text(
-                    notice.text,
+                    detail == null ? notice.text : '${notice.text} · $detail',
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
