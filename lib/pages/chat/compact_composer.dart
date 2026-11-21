@@ -35,14 +35,14 @@ class CompactComposer extends StatefulWidget {
   final Widget? tertiaryAction;
 
   /// Keep the composer one row on phones with three recording actions: the
-  /// recording actions fold behind a small chevron at the end of the row
-  /// and slide out (towards the editor) when it is tapped. With text the
-  /// send button takes the chevron's place. The decision depends only on
+  /// recording actions fold behind a recording picker at the end of the row
+  /// and reveal above the editor when pressed. With text the send button
+  /// takes the picker's place. The decision depends only on
   /// available width, so typing never moves the Send button.
   final bool useCompactActionToolbar;
 
   /// Whether [primaryAction] is a recording control (the voice mic) rather
-  /// than send. On a phone row it then folds behind the chevron with the
+  /// than send. On a phone row it then folds behind the picker with the
   /// [secondaryAction] and [tertiaryAction].
   final bool primaryIsRecord;
   final double sourceWidth;
@@ -54,6 +54,9 @@ class CompactComposer extends StatefulWidget {
   /// Actions that always sit between the "+" ([addAction]) and the editor,
   /// for example the emoji toggle when "+" opens the attach menu directly.
   final List<ComposerAction> inlineActions;
+
+  /// An action inside the editor at the end edge, such as the emoji toggle.
+  final ComposerAction? fieldAction;
 
   /// Disables the "+" button (and collapses an open tray) when false.
   final bool actionsEnabled;
@@ -83,6 +86,7 @@ class CompactComposer extends StatefulWidget {
     this.contextPreview,
     this.actions,
     this.inlineActions = const [],
+    this.fieldAction,
     this.actionsEnabled = true,
     this.collapseOnText,
     this.onExpandedChanged,
@@ -104,7 +108,7 @@ class _CompactComposerState extends State<CompactComposer>
   // Collapsed editor minimum that decides whether the source stays inline.
   static const double _editorMin = 120;
   // The same on the one-row phone composer (its trailing slot is one 48dp
-  // chevron, not three recording actions).
+  // picker, not three recording actions).
   static const double _foldedEditorMin = 72;
 
   late final AnimationController _tray = AnimationController(
@@ -124,7 +128,7 @@ class _CompactComposerState extends State<CompactComposer>
     vsync: this,
     duration: NotionMotion.medium,
     reverseDuration: NotionMotion.short,
-  );
+  )..addStatusListener(_recordStatusChanged);
   late final CurvedAnimation _recordProgress = CurvedAnimation(
     parent: _record,
     curve: NotionMotion.emphasized,
@@ -135,6 +139,7 @@ class _CompactComposerState extends State<CompactComposer>
   /// The last [CompactComposer.secondaryAction], kept while its slot closes.
   Widget? _secondary;
   Widget? _tertiary;
+  Widget? _recordPrimary;
   final _primaryKey = GlobalKey();
 
   bool get _hasActions =>
@@ -149,6 +154,7 @@ class _CompactComposerState extends State<CompactComposer>
     widget.collapseOnText?.addListener(_textChanged);
     _secondary = widget.secondaryAction;
     _tertiary = widget.tertiaryAction;
+    if (widget.primaryIsRecord) _recordPrimary = widget.primaryAction;
   }
 
   @override
@@ -156,12 +162,17 @@ class _CompactComposerState extends State<CompactComposer>
     super.didUpdateWidget(oldWidget);
     _secondary = widget.secondaryAction ?? _secondary;
     _tertiary = widget.tertiaryAction ?? _tertiary;
+    if (widget.primaryIsRecord) _recordPrimary = widget.primaryAction;
     if (!identical(oldWidget.collapseOnText, widget.collapseOnText)) {
       oldWidget.collapseOnText?.removeListener(_textChanged);
       _lastText = widget.collapseOnText?.text ?? '';
       widget.collapseOnText?.addListener(_textChanged);
     }
-    if (_recordOpen && !widget.primaryIsRecord) _applyRecord(false);
+    if (_recordOpen &&
+        (!widget.primaryIsRecord ||
+            oldWidget.collapseToken != widget.collapseToken)) {
+      _applyRecord(false);
+    }
     if (_expanded &&
         (oldWidget.collapseToken != widget.collapseToken ||
             !identical(oldWidget.collapseOnText, widget.collapseOnText) ||
@@ -203,10 +214,20 @@ class _CompactComposerState extends State<CompactComposer>
     }
   }
 
+  void _recordStatusChanged(AnimationStatus status) {
+    // The opening and closing animation preserves the recording buttons
+    // until the panel reaches zero height.
+    if (status == AnimationStatus.dismissed && !widget.primaryIsRecord) {
+      setState(() {});
+    }
+  }
+
   void _toggleRecord() {
     NotionHaptics.light();
     setState(() => _applyRecord(!_recordOpen));
   }
+
+  bool get _polish => Localizations.localeOf(context).languageCode == 'pl';
 
   void _setExpanded(bool value) {
     if (_expanded == value || !mounted) return;
@@ -253,6 +274,34 @@ class _CompactComposerState extends State<CompactComposer>
     );
   }
 
+  Widget _actionButton(ComposerAction action) => SizedBox.square(
+    dimension: NotionSize.touchTarget,
+    child: NotionIconButton(
+      icon: action.icon,
+      label: action.label,
+      selected: action.selected,
+      onPressed: widget.actionsEnabled ? action.onPressed : null,
+    ),
+  );
+
+  Widget _recordChoice(Widget button, String label) => SizedBox(
+    width: NotionSize.touchTarget + NotionSpace.xl,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox.square(dimension: NotionSize.touchTarget, child: button),
+        ExcludeSemantics(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: context.notion.typography.caption,
+          ),
+        ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -263,7 +312,9 @@ class _CompactComposerState extends State<CompactComposer>
         chip is ConversationSourceChip ? chip.preferredWidth(context) : 0.0,
       );
       final rowChrome =
-          _rowChrome + widget.inlineActions.length * NotionSize.touchTarget;
+          _rowChrome +
+          (widget.inlineActions.length + (widget.fieldAction == null ? 0 : 1)) *
+              NotionSize.touchTarget;
       final folded =
           widget.useCompactActionToolbar &&
           constraints.maxWidth <
@@ -327,6 +378,31 @@ class _CompactComposerState extends State<CompactComposer>
           children: [
             // Keep both slots present, including when there is no preview.
             widget.contextPreview ?? const SizedBox.shrink(),
+            if (folded &&
+                (widget.primaryIsRecord || !_record.isDismissed) &&
+                _recordPrimary != null)
+              _FoldedRecordActions(
+                progress: _recordProgress,
+                open: _recordOpen && widget.primaryIsRecord,
+                children: [
+                  if ((widget.primaryIsRecord
+                          ? widget.tertiaryAction
+                          : _tertiary)
+                      case final action?)
+                    _recordChoice(action, _polish ? 'Dyktuj' : 'Dictate'),
+                  if ((widget.primaryIsRecord
+                          ? widget.secondaryAction
+                          : _secondary)
+                      case final action?)
+                    _recordChoice(action, _polish ? 'Kółko' : 'Round'),
+                  _recordChoice(
+                    _primaryAction(_recordPrimary),
+                    _polish ? 'Głos' : 'Voice',
+                  ),
+                ],
+              )
+            else
+              const SizedBox.shrink(),
             Padding(
               padding: EdgeInsetsDirectional.only(
                 start: 52,
@@ -346,17 +422,7 @@ class _CompactComposerState extends State<CompactComposer>
                   child: _addButton(context),
                 ),
                 for (final action in widget.inlineActions)
-                  SizedBox.square(
-                    dimension: NotionSize.touchTarget,
-                    child: NotionIconButton(
-                      icon: action.icon,
-                      label: action.label,
-                      selected: action.selected,
-                      onPressed: widget.actionsEnabled
-                          ? action.onPressed
-                          : null,
-                    ),
-                  ),
+                  _actionButton(action),
                 // Always present so the editor keeps its index in this row.
                 ComposerActionTray(
                   actions: actions,
@@ -426,6 +492,8 @@ class _CompactComposerState extends State<CompactComposer>
                                         child: widget.input,
                                       ),
                                     ),
+                                    if (widget.fieldAction case final action?)
+                                      _actionButton(action),
                                   ],
                                 ),
                                 Positioned.fill(
@@ -438,31 +506,12 @@ class _CompactComposerState extends State<CompactComposer>
                           ),
                         ),
                       ),
-                      // Folded recording actions slide out over the end
-                      // of the field (the editor keeps its width).
-                      PositionedDirectional(
-                        end: 0,
-                        bottom: 0,
-                        child: folded
-                            ? _FoldedRecordActions(
-                                progress: _recordProgress,
-                                open: _recordOpen && widget.primaryIsRecord,
-                                children: [
-                                  _extraAction(tertiary: true),
-                                  _extraAction(),
-                                  if (widget.primaryIsRecord) _primaryAction(),
-                                ],
-                              )
-                            : const SizedBox.shrink(),
-                      ),
                     ],
                   ),
                 ),
                 const SizedBox(width: NotionSpace.xxs),
                 // Always present so the editor keeps its index in this row.
-                // Folded: one cluster (dictation, round, mic) slides out
-                // from behind the chevron; the primary slot shows the
-                // chevron, or send once there is text.
+                // Compact layouts keep a single slot for recording or send.
                 if (!folded) ...[_extraAction(tertiary: true), _extraAction()],
                 // Mic ↔ send and disabled → enabled morph with a small
                 // spring (key each state's widget).
@@ -483,32 +532,26 @@ class _CompactComposerState extends State<CompactComposer>
     child: tertiary ? _tertiary : _secondary,
   );
 
-  /// The end of the one-row phone composer: the chevron that folds the
-  /// recording actions, or [CompactComposer.primaryAction] (send).
+  /// The end of the one-row phone composer: the recording picker or send.
   Widget _foldedPrimary() {
     final Widget child;
     if (widget.primaryIsRecord) {
-      final reduced = ConversationMotion.reduced(context);
       child = MergeSemantics(
         key: const ValueKey('composer-record-toggle'),
         child: Semantics(
           expanded: _recordOpen,
-          child: IconButton(
-            tooltip: _recordOpen
-                ? 'Hide recording options'
-                : 'Show recording options',
-            onPressed: _toggleRecord,
-            icon: AnimatedRotation(
-              turns: _recordOpen ? 0.5 : 0,
-              duration: reduced ? Duration.zero : NotionMotion.medium,
-              curve: NotionMotion.emphasized,
-              child: const Icon(Icons.chevron_left),
-            ),
+          child: NotionIconButton(
+            icon: Icons.graphic_eq,
+            label: _recordOpen
+                ? (_polish ? 'Ukryj nagrywanie' : 'Hide recording options')
+                : (_polish ? 'Pokaż nagrywanie' : 'Show recording options'),
+            selected: _recordOpen,
+            onPressed: widget.inputOverlay == null ? _toggleRecord : null,
           ),
         ),
       );
     } else {
-      // Not [_primaryKey]: while this cross-fades back to the chevron, the
+      // Not [_primaryKey]: while this cross-fades back to the picker, the
       // keyed mic is already in the cluster.
       child = KeyedSubtree(
         key: const ValueKey('composer-folded-primary'),
@@ -521,19 +564,21 @@ class _CompactComposerState extends State<CompactComposer>
     );
   }
 
-  Widget _primaryAction() => KeyedSubtree(
+  Widget _primaryAction([Widget? action]) => KeyedSubtree(
     key: _primaryKey,
     child: SizedBox.square(
       dimension: NotionSize.touchTarget,
-      child: NotionMorphSwitcher(bounce: true, child: widget.primaryAction),
+      child: NotionMorphSwitcher(
+        bounce: true,
+        child: action ?? widget.primaryAction,
+      ),
     ),
   );
 }
 
 /// The recording actions of the one-row phone composer. They stay mounted
-/// (a held mic and the round gesture keep their state) and are revealed from
-/// the chevron's side: the width grows towards the editor while the actions
-/// slide in and fade. Closed, they ignore touches and screen readers.
+/// (a held mic and the round gesture keep their state) and reveal above the
+/// field. Closed, they ignore touches, focus and screen readers.
 class _FoldedRecordActions extends StatelessWidget {
   final Animation<double> progress;
   final bool open;
@@ -546,43 +591,33 @@ class _FoldedRecordActions extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => IgnorePointer(
-    ignoring: !open,
-    child: ExcludeSemantics(
-      excluding: !open,
-      child: AnimatedBuilder(
-        animation: progress,
-        child: DecoratedBox(
-          // The field's own fill and hairline, so the actions read as a
-          // pill that slid out of the chevron over the editor.
-          decoration: ShapeDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHigh,
-            shape: StadiumBorder(
-              side: BorderSide(color: context.notion.glass.border),
-            ),
-          ),
+  Widget build(BuildContext context) => ExcludeFocus(
+    excluding: !open,
+    child: IgnorePointer(
+      ignoring: !open,
+      child: ExcludeSemantics(
+        excluding: !open,
+        child: AnimatedBuilder(
+          animation: progress,
           child: Padding(
-            padding: const EdgeInsets.all(1),
-            child: Row(mainAxisSize: MainAxisSize.min, children: children),
-          ),
-        ),
-        builder: (context, row) {
-          final t = progress.value.clamp(0.0, 1.0);
-          final rtl = Directionality.of(context) == TextDirection.rtl;
-          return ClipRect(
-            child: Align(
-              alignment: AlignmentDirectional.centerEnd,
-              widthFactor: t,
-              child: Opacity(
-                opacity: t,
-                child: FractionalTranslation(
-                  translation: Offset((1 - t) * (rtl ? -0.35 : 0.35), 0),
-                  child: row,
-                ),
-              ),
+            padding: const EdgeInsets.only(bottom: NotionSpace.xs),
+            child: NotionGlassPanel(
+              blur: false,
+              padding: const EdgeInsets.only(bottom: NotionSpace.xxs),
+              child: Row(mainAxisSize: MainAxisSize.min, children: children),
             ),
-          );
-        },
+          ),
+          builder: (context, row) {
+            final t = progress.value.clamp(0.0, 1.0);
+            return ClipRect(
+              child: Align(
+                alignment: AlignmentDirectional.bottomEnd,
+                heightFactor: t,
+                child: Opacity(opacity: t, child: row),
+              ),
+            );
+          },
+        ),
       ),
     ),
   );

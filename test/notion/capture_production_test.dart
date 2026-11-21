@@ -26,6 +26,7 @@ const _screenGoldens = {
   'inbox-390',
   'inbox-390-scrolled',
   'conversation-390',
+  'conversation-390-recording',
   'conversation-390-scrolled',
   'merged-430-keyboard-error',
   'chat-details-390',
@@ -315,34 +316,39 @@ Widget _conversation({bool merged = false, bool error = false}) => Scaffold(
                   ),
                 ),
                 source: ConversationSourceChip(
-                  network: 'whatsapp',
+                  network: merged ? 'whatsapp' : 'instagram',
                   onPressed: merged ? _noop : null,
                 ),
-                actions: [
-                  const ComposerAction(
-                    icon: Icons.attach_file_outlined,
-                    label: 'Attach media or a file',
-                    onPressed: _noop,
-                  ),
-                  if (!merged)
-                    const ComposerAction(
-                      icon: Icons.add_reaction_outlined,
-                      label: 'Emoji picker',
-                      onPressed: _noop,
-                    ),
-                ],
-                primaryAction: merged
-                    ? IconButton(
-                        icon: const Icon(Icons.mic_none_outlined),
-                        tooltip: 'Record in source conversation',
+                addAction: const NotionIconButton(
+                  icon: Icons.add,
+                  label: 'Attach media or a file',
+                  onPressed: _noop,
+                ),
+                fieldAction: const ComposerAction(
+                  icon: Icons.sentiment_satisfied_alt_outlined,
+                  label: 'Emoji picker',
+                  onPressed: _noop,
+                ),
+                useCompactActionToolbar: true,
+                primaryIsRecord: true,
+                primaryAction: VoiceRecordButton(
+                  hold: VoiceRecordHold(),
+                  onStart: () async => false,
+                  onSend: () async {},
+                  onCancel: _noop,
+                ),
+                secondaryAction: merged
+                    ? null
+                    : const NotionIconButton(
+                        icon: Icons.videocam_outlined,
+                        label: 'Round video',
                         onPressed: _noop,
-                      )
-                    : VoiceRecordButton(
-                        hold: VoiceRecordHold(),
-                        onStart: () async => false,
-                        onSend: () async {},
-                        onCancel: _noop,
                       ),
+                tertiaryAction: const NotionIconButton(
+                  icon: Icons.edit_note_outlined,
+                  label: 'Dictate a message',
+                  onPressed: _noop,
+                ),
               ),
             ),
           ),
@@ -562,6 +568,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.pumpWidget(_host(_conversation()));
     await _save(tester, 'conversation-390');
+    await tester.tap(find.byTooltip('Show recording options'));
+    await _save(tester, 'conversation-390-recording');
+    await tester.tap(find.byTooltip('Hide recording options'));
+    await tester.pumpAndSettle();
     await _scrollUnderChrome(tester);
     await _save(tester, 'conversation-390-scrolled', scrollToTop: false);
     await tester.pumpWidget(_host(_details()));

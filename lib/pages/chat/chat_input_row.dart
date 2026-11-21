@@ -329,18 +329,14 @@ class _ChatInputRowState extends State<ChatInputRow> {
     controller.setSendingClient(client);
   }
 
-  /// Always beside "+": the emoji toggle (one tap, like Telegram and
-  /// Messenger), unchanged in look and behaviour.
-  List<ComposerAction> _inlineActions() => [
-    ComposerAction(
-      icon: controller.showEmojiPicker
-          ? Icons.keyboard
-          : Icons.add_reaction_outlined,
-      label: 'Emoji picker',
-      selected: controller.showEmojiPicker,
-      onPressed: controller.emojiPickerAction,
-    ),
-  ];
+  ComposerAction get _emojiAction => ComposerAction(
+    icon: controller.showEmojiPicker
+        ? Icons.keyboard
+        : Icons.sentiment_satisfied_alt_outlined,
+    label: controller.showEmojiPicker ? 'Show keyboard' : 'Emoji picker',
+    selected: controller.showEmojiPicker,
+    onPressed: _holding ? null : controller.emojiPickerAction,
+  );
 
   /// Round video in this chat, or null outside Telegram and Messenger
   /// chats (Messenger receives it as a square video). Display only:
@@ -595,7 +591,7 @@ class _ChatInputRowState extends State<ChatInputRow> {
                         ),
                   ),
                   addAction: _attachButton(),
-                  inlineActions: _inlineActions(),
+                  fieldAction: _emojiAction,
                   actionsEnabled: controller.composerEnabled,
                   collapseOnText: controller.sendController,
                   collapseToken: Object.hash(
@@ -603,7 +599,6 @@ class _ChatInputRowState extends State<ChatInputRow> {
                     controller.sendingClient.userID,
                     controller.replyEvent?.eventId,
                     controller.editEvent?.eventId,
-                    _holding,
                   ),
                   inputOverlay: _hold.capturing
                       // Recording samples tick only the overlay's clock.

@@ -31,7 +31,7 @@ The production ordinary and merged timelines use these presentation-only contrac
 - `conversation_grouping.dart`: `ConversationGroupingItem(accountId, sourceId, senderId, outgoing, timestamp, threadId?, deliveryState, boundary)` and `conversationGroupPosition(item:, older:, newer:)`. Neighbours are chronological; ordinary reverse-list names must be translated by the adapter. Matrix sent/synced share the sent presentation state.
 - `conversation_bubble.dart`: `ConversationBubble(body:, outgoing:, groupPosition:, avatar?, heading?, footer?, reactions?, media:, selected:, backgroundColor?, surfaceBuilder?)`. `surfaceBuilder` wraps the complete fill outside clipping; gestures must not wrap only its text child. Avatar/heading/metadata stay outside that transform. `ConversationBubbleColors` is a theme extension with light/dark defaults.
 - `conversation_message_gestures.dart`: `ConversationMessageGestures(child:, identity:, onReply?, onLike?, enabled:, swipeRightToLeft:, quickLikeEnabled:, interactiveContent:, likeEmoji:)`. `onLike` returns true only for a newly accepted intent, not delivery. Selection and interactive content disable quick mutations; mouse double click belongs to selection. `ConversationMotion.reduced` observes both accessibility flags through the motion widgets.
-- `compact_composer.dart`: `CompactComposer(input:, source:, addAction?, primaryAction:, secondaryAction?, tertiaryAction?, useCompactActionToolbar: false, sourceWidth: 0, contextPreview?, actions?, inlineActions: const [], actionsEnabled: true, collapseOnText?, onExpandedChanged?, collapseToken?, inputOverlay?)`; caller owns the controller/editor/focus. `secondaryAction` and `tertiaryAction` are optional 48 dp slots before the primary action. With `useCompactActionToolbar`, narrow layouts put source and recording/send controls in a row above the editor; the width decision stays stable when typing hides optional actions. Otherwise the source alone moves across breakpoints. `ConversationSourceChip(network:, label?, locked:, onPressed?, available:, compact: true, hint:)` never changes routing. `conversationComposerMaxLines` caps the remaining viewport at 1–4 lines. See the composer sections below.
+- `compact_composer.dart`: `CompactComposer(input:, source:, addAction?, primaryAction:, secondaryAction?, tertiaryAction?, useCompactActionToolbar: false, sourceWidth: 0, contextPreview?, actions?, inlineActions: const [], fieldAction?, actionsEnabled: true, collapseOnText?, onExpandedChanged?, collapseToken?, inputOverlay?)`. The caller owns the controller and focus. The production composer uses `fieldAction` for the emoji toggle. With `useCompactActionToolbar`, narrow layouts reveal recording controls above the editor. Typing returns the trailing slot to Send. `ConversationSourceChip(network:, label?, locked:, onPressed?, available:, compact: true, hint:)` presents the sending route. `conversationComposerMaxLines` caps the remaining viewport at 1–4 lines.
 - `conversation_source_picker.dart`: options carry the full `ConversationRef`, display title/subtitle, availability/reason. `showConversationSourcePicker` returns `ConversationRef?`; cancel is null. The controller must revalidate its frozen account/group/reply/source after await. Routes and tap regions preserve active editor composition.
 - `conversation_message_actions.dart`: the shared SDK reaction adapter is used by double tap, menu and reaction chips. `strict:false` preserves ordinary unverified policy, `strict:true` preserves merged policy. Never bypass it with direct SDK mutation. It guards unresolved source-event intentions, synced add evidence and originating-timeline/redaction removal evidence. Client-lifetime bookkeeping is not a durable reaction outbox or exactly-once guarantee.
 
@@ -95,7 +95,7 @@ Transcription: `NotionTranscribeSplitButton` (label segment + language segment w
 
 Attach menu order: Image, Video, File | Take a photo, Record a video (mobile) | Location (mobile), Poll | Record a round video silently (last, only when available). Trays: Attach · Emoji (+ "Send from another account" in an ordinary multi-account chat); round video is a button beside the mic, not a tray action, and "Record a round video silently" is inside the Attach popup when `silent_send` is allowed (no bare mute icon). When the open tray would leave the editor under 120dp, the inline source chip and its divider shrink to 0 with the tray animation (clipped, no taps, excluded from semantics); the editor keeps its ancestors and child index. The overflow is a themed `MenuAnchor` with 48dp `MenuItemButton`s and a `NotionIconButton` "More actions" trigger. While the mic is held, an `OverlayPortal` draws a 36×72 lock pill (lock over chevron-up, follows `lockProgress`) above the mic and a 1.6× mic fill (`VoiceRecordLayout`). `RecordingDot` lives in `voice_record_button.dart`. All recording clocks use `m:ss` (`notionAudioTime`). `NotionSendButton(tooltip:)` defaults to "Send message"; the voice row uses "Send voice message". Composer field radius is `NotionRadius.field`/`fieldAll` (26).
 
-## Composer dictation and compact action toolbar — 2026-11-05
+## Composer dictation and recording controls
 
 This updates the recording layout described above. Ordinary and merged chat
 use `tertiaryAction` for **Dictate a message** (**Dyktuj wiadomość**), with
@@ -105,13 +105,12 @@ is empty and not editing, and no voice hold is active. An unavailable or busy
 worker produces an explanation on tap before recording starts.
 
 `ChatInputRow` opts into `useCompactActionToolbar` on recording-capable
-platforms. At narrow widths the source chip, dictation, round (when available)
-and primary action sit above the Attach/Emoji/editor row. Wider layouts keep
-the actions beside the editor. Both optional slots use the existing
-`NotionSizeReveal`; hiding them when text appears does not move the editor's
-ancestors or change its child index. Toolbar selection depends on available
-width, not whether those slots currently have a child, so typing keeps Send
-in the same row.
+platforms. Attach stays at the start edge. The field shows the current
+network and puts the emoji/keyboard toggle at the end. On narrow layouts,
+the waveform opens a labeled panel above the editor. The editor and source
+keep their width while the panel opens. Wider layouts show the three
+recording actions beside the field. Typing closes the panel and puts Send in
+the same trailing slot. The editor keeps its focus and text.
 
 `dictation_dialog.dart` provides these direct-import contracts:
 
