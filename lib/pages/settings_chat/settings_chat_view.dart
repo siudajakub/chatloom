@@ -89,6 +89,11 @@ class SettingsChatView extends StatelessWidget {
                   NotionPickerRow<InboxSwipeChoice>(
                     key: Key('settings_${setting.name}'),
                     label: label,
+                    subtitle:
+                        setting == AppSettings.inboxSwipeLeft &&
+                            setting.value == InboxSwipeChoice.archive.name
+                        ? 'Move down or up for unread chats at the top'
+                        : null,
                     value: InboxSwipeChoice.parse(setting.value, fallback),
                     options: [
                       for (final choice in InboxSwipeChoice.values)

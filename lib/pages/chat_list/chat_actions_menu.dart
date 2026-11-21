@@ -17,6 +17,11 @@ enum InboxSwipeChoice {
 
   static InboxSwipeChoice parse(String? name, InboxSwipeChoice fallback) =>
       values.firstWhere((value) => value.name == name, orElse: () => fallback);
+
+  InboxSwipeChoice forLeftSwipe({
+    required bool unread,
+    required bool archived,
+  }) => this == archive && unread && !archived ? moveDown : this;
 }
 
 /// The long-press actions of an inbox row (Telegram, Messenger). Deliberately

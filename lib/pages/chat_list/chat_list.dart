@@ -1100,7 +1100,8 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       a == null || (b != null && b.isAfter(a)) ? b : a;
 
   /// The swipe sides of an inbox row (UX-14, Telegram). By default a swipe
-  /// towards the start archives (unarchives in the Archive view) and one
+  /// towards the start moves an eligible unread chat down or up, archives a
+  /// read chat (or unarchives an archived chat), and one
   /// towards the end marks read or unread; Settings → Chats chooses either
   /// side's action (archive, read/unread, pin/unpin, move down/up or
   /// nothing). Null without the setting, for invites and left chats. The
@@ -1119,15 +1120,14 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
             for (final member in group.members)
               ?room.client.getRoomById(member.roomId),
           ];
-    final unread = sources.any((source) => source.isUnread);
+    final unread = sources.any(personalRoomUnread);
     final metadata = projection.metadataFor(room);
     final archived = metadata.archived;
     final pinned = metadata.isPinned;
     final ignored = projection.placementFor(room) == ChatPlacement.ignored;
     // Move down/up applies only where the unread rule raises the row; the
     // shown record says whether it is moved down (no per-row recompute).
-    final movable =
-        !pinned && !metadata.muted && sources.any(personalRoomUnread);
+    final movable = unread && !ignored && !pinned && !metadata.muted;
     final movedDown =
         movable && (inbox.index.recordFor(room)?.movedDown ?? false);
     void commit(ChatMenuAction action, String refused) {
@@ -1206,7 +1206,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         InboxSwipeChoice.parse(
           AppSettings.inboxSwipeLeft.value,
           InboxSwipeChoice.archive,
-        ),
+        ).forLeftSwipe(unread: unread, archived: archived),
       ),
       toEnd: side(
         InboxSwipeChoice.parse(

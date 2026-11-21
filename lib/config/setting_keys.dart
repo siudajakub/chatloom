@@ -181,8 +181,8 @@ enum AppSettings<T> {
   /// network's first quick reaction, a heart wherever it has one.
   doubleTapReaction<String>('chat.fluffy.double_tap_reaction', ''),
 
-  /// Inbox row swipes (Telegram): left archives (with Undo), right marks
-  /// read or unread. Settings › Chats › "Swipe chats in the list" (UX-14).
+  /// Inbox row swipes: left moves unread chats down or archives read chats,
+  /// right marks read or unread. Settings › Chats › "Swipe chats in the list".
   inboxSwipeActions<bool>('pl.personal.inbox.swipe_actions', true),
 
   /// What a swipe towards the start (left) and the end (right) does:
