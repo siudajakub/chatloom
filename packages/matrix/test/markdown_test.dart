@@ -145,7 +145,7 @@ void main() {
       );
       expect(
         markdown('How is @[Bob Ross] doing?', getMention: getMention),
-        'How is <a href="https://matrix.to/#/@bobross:example.org">@[Bob Ross]</a> doing?',
+        'How is <a href="https://matrix.to/#/@bobross:example.org">@Bob Ross</a> doing?',
       );
       expect(
         markdown('Hey @invalid!', getMention: getMention),
@@ -153,15 +153,15 @@ void main() {
       );
       expect(
         markdown('Hey @Fox#123!', getMention: getMention),
-        'Hey <a href="https://matrix.to/#/@fox:example.org">@Fox#123</a>!',
+        'Hey <a href="https://matrix.to/#/@fox:example.org">@Fox</a>!',
       );
       expect(
         markdown('Hey @[Fast Fox]#123!', getMention: getMention),
-        'Hey <a href="https://matrix.to/#/@fastfox:example.org">@[Fast Fox]#123</a>!',
+        'Hey <a href="https://matrix.to/#/@fastfox:example.org">@Fast Fox</a>!',
       );
       expect(
         markdown('Hey @[">]!', getMention: getMention),
-        'Hey <a href="https://matrix.to/#/@blah:example.org">@[&quot;&gt;]</a>!',
+        'Hey <a href="https://matrix.to/#/@blah:example.org">@&quot;&gt;</a>!',
       );
     });
     test('latex', () {

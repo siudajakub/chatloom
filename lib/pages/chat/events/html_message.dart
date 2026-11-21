@@ -6,6 +6,7 @@
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
+import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/code_highlight_theme.dart';
 import 'package:chatloom/utils/event_checkbox_extension.dart';
@@ -253,11 +254,20 @@ class _HtmlMessageState extends State<HtmlMessage> {
         if (matrixId != null) {
           if (matrixId.sigil == '@') {
             final user = room.unsafeGetUserFromMemoryOrFallback(matrixId);
+            final displayName = user.displayName?.trim();
+            final label = node.text.trim();
             return WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
               child: MatrixPill(
                 key: Key('user_pill_$matrixId'),
-                name: user.calcDisplayname(),
-                avatar: user.avatarUrl,
+                name: displayName?.isNotEmpty == true
+                    ? displayName!
+                    : label.isNotEmpty && label != matrixId
+                    ? label.replaceFirst(RegExp(r'^@'), '')
+                    : user.calcDisplayname(),
+                avatar: userAvatarUri(user),
+                client: room.client,
+                mention: true,
                 uri: href,
                 outerContext: context,
                 fontSize: fontSize,
@@ -788,6 +798,8 @@ class MatrixPill extends StatelessWidget {
   final String uri;
   final double? fontSize;
   final Color? color;
+  final Client? client;
+  final bool mention;
 
   const MatrixPill({
     super.key,
@@ -797,6 +809,8 @@ class MatrixPill extends StatelessWidget {
     required this.uri,
     required this.fontSize,
     required this.color,
+    this.client,
+    this.mention = false,
   });
 
   @override
@@ -808,13 +822,19 @@ class MatrixPill extends StatelessWidget {
         TextSpan(
           children: [
             WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
               child: Padding(
-                padding: const EdgeInsetsDirectional.only(end: 4.0),
-                child: Avatar(mxContent: avatar, name: name, size: 16),
+                padding: const EdgeInsetsDirectional.only(end: NotionSpace.xxs),
+                child: Avatar(
+                  client: client,
+                  mxContent: avatar,
+                  name: name,
+                  size: NotionSize.iconSm,
+                ),
               ),
             ),
             TextSpan(
-              text: name,
+              text: mention && !name.startsWith('@') ? '@$name' : name,
               style: TextStyle(
                 color: color,
                 decorationColor: color,

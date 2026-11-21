@@ -1345,7 +1345,7 @@ void main() {
     test('sendEvent with user mention', () async {
       FakeMatrixApi.calledEndpoints.clear();
       final resp = await room.sendTextEvent(
-        'Hello world @[Alice Margatroid]',
+        'Hello, @[Alice Margatroid]! `@room` or name@example.org',
         addMentions: true,
         txid: 'testtxid',
       );
@@ -1357,6 +1357,7 @@ void main() {
       expect(content['m.mentions'], {
         'user_ids': ['@alice:matrix.org'],
       });
+      expect(content['formatted_body'], contains('>@Alice Margatroid</a>!'));
     });
 
     test('send edit', () async {

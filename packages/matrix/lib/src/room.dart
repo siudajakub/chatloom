@@ -984,56 +984,36 @@ class Room {
     }
     final event = <String, dynamic>{'msgtype': msgtype, 'body': message};
 
-    if (addMentions) {
-      var potentialMentions =
-          message
-              .split('@')
-              .map(
-                (text) => text.startsWith('[')
-                    ? '@${text.split(']').first}]'
-                    : '@${text.split(RegExp(r'\s+')).first}',
-              )
-              .toList()
-            ..removeAt(0);
-
-      final hasRoomMention = potentialMentions.remove('@room');
-
-      potentialMentions =
-          potentialMentions
-              .map(
-                (mention) => mention.isValidMatrixIdStrict()
-                    ? mention
-                    : getMention(mention),
-              )
-              .nonNulls
-              .toSet() // Deduplicate
-              .toList()
-            ..remove(client.userID); // We should never mention ourself.
-
-      // https://spec.matrix.org/v1.7/client-server-api/#mentioning-the-replied-to-user
-      if (inReplyTo != null) potentialMentions.add(inReplyTo.senderId);
-
-      if (hasRoomMention || potentialMentions.isNotEmpty) {
-        event['m.mentions'] = {
-          if (hasRoomMention) 'room': true,
-          if (potentialMentions.isNotEmpty) 'user_ids': potentialMentions,
-        };
-      }
-    }
-
-    if (parseMarkdown) {
+    final mentions = <String>{};
+    if (parseMarkdown || addMentions) {
       final html = markdown(
         event['body'],
         getEmotePacks: () => getImagePacksFlat(ImagePackUsage.emoticon),
         getMention: getMention,
+        onMention: addMentions ? mentions.add : null,
         convertLinebreaks: client.convertLinebreaksInFormatting,
         enableLatex: client.enableLatexMarkdown,
       );
       // if the decoded html is the same as the body, there is no need in sending a formatted message
-      if (HtmlUnescape().convert(html.replaceAll(RegExp(r'<br />\n?'), '\n')) !=
-          event['body']) {
+      if (parseMarkdown &&
+          HtmlUnescape().convert(html.replaceAll(RegExp(r'<br />\n?'), '\n')) !=
+              event['body']) {
         event['format'] = 'org.matrix.custom.html';
         event['formatted_body'] = html;
+      }
+    }
+    if (addMentions) {
+      final hasRoomMention = mentions.remove('@room');
+      mentions.removeWhere(
+        (mention) =>
+            mention == client.userID || !mention.isValidMatrixIdStrict(),
+      );
+      if (inReplyTo != null) mentions.add(inReplyTo.senderId);
+      if (hasRoomMention || mentions.isNotEmpty) {
+        event['m.mentions'] = {
+          if (hasRoomMention) 'room': true,
+          if (mentions.isNotEmpty) 'user_ids': mentions.toList(),
+        };
       }
     }
     return sendEvent(

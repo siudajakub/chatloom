@@ -318,15 +318,22 @@ class InputBar extends StatelessWidget {
     return const SizedBox.shrink();
   }
 
-  String insertSuggestion(Map<String, String?> suggestion) {
-    final replaceText = controller!.text.substring(
-      0,
-      controller!.selection.baseOffset,
-    );
-    var startText = '';
-    final afterText = replaceText == controller!.text
-        ? ''
-        : controller!.text.substring(controller!.selection.baseOffset + 1);
+  String insertSuggestion(Map<String, String?> suggestion) =>
+      _suggestionValue(controller!.value, suggestion).text;
+
+  TextEditingValue _suggestionValue(
+    TextEditingValue value,
+    Map<String, String?> suggestion,
+  ) {
+    final offset = value.selection.baseOffset;
+    if (!value.selection.isCollapsed ||
+        offset < 0 ||
+        offset > value.text.length) {
+      return value;
+    }
+    final replaceText = value.text.substring(0, offset);
+    var startText = replaceText;
+    final afterText = value.text.substring(offset);
     var insertText = '';
     if (suggestion['type'] == 'command') {
       insertText = '${suggestion['name']!} ';
@@ -368,7 +375,7 @@ class InputBar extends StatelessWidget {
       );
     }
     if (suggestion['type'] == 'user') {
-      insertText = '${suggestion['mention']!} ';
+      insertText = '${suggestion['mention']!}${mentionSeparator(afterText)}';
       startText = replaceText.replaceAllMapped(
         mentionTokenPattern,
         (Match m) => '${m[1]}$insertText',
@@ -382,12 +389,16 @@ class InputBar extends StatelessWidget {
       );
     }
 
-    return startText + afterText;
+    return TextEditingValue(
+      text: startText + afterText,
+      selection: TextSelection.collapsed(offset: startText.length),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    TextEditingValue? selectedValue;
     return Autocomplete<Map<String, String?>>(
       key: Key('chat_input_field'),
       focusNode: focusNode,
@@ -472,7 +483,17 @@ class InputBar extends StatelessWidget {
           ),
         );
       },
-      displayStringForOption: insertSuggestion,
+      displayStringForOption: (suggestion) {
+        final value = _suggestionValue(controller!.value, suggestion);
+        selectedValue = value;
+        return value.text;
+      },
+      onSelected: (_) {
+        final value = selectedValue;
+        if (value == null) return;
+        controller!.value = value;
+        onChanged?.call(value.text);
+      },
       optionsViewOpenDirection: OptionsViewOpenDirection.up,
     );
   }

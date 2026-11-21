@@ -3,28 +3,48 @@ import 'dart:async';
 
 import 'package:chatloom/personal/bridge_contact_search.dart' show searchFold;
 import 'package:chatloom/personal/bridged_room.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
 /// Characters of a mention or room query: letters (any script, Polish
 /// diacritics included), combining marks, digits, `_`, `.` and `-`. Dart's
 /// `\w` is ASCII only, so `@Ł` never opened suggestions before (FX-08).
 const _queryChars = r'[\p{L}\p{M}\p{N}_.\-]';
+const _nameQuery = '$_queryChars*(?:[ \\t]+$_queryChars+)*';
 
 /// `@query` right before the cursor; an empty query lists the people of the
 /// chat (Telegram shows them as soon as `@` is typed).
-final mentionQueryPattern = RegExp(
-  '(?:\\s|^)@($_queryChars*)\$',
-  unicode: true,
-);
+final mentionQueryPattern = RegExp('(?:\\s|^)@($_nameQuery)\$', unicode: true);
 
 /// The `@query` token to replace when a person is picked.
-final mentionTokenPattern = RegExp('(\\s|^)(@$_queryChars*)\$', unicode: true);
+final mentionTokenPattern = RegExp('(\\s|^)(@$_nameQuery)\$', unicode: true);
 
 /// `#query` right before the cursor (at least one character).
 final roomQueryPattern = RegExp('(?:\\s|^)#($_queryChars+)\$', unicode: true);
 
 /// The `#query` token to replace when a room is picked.
 final roomTokenPattern = RegExp('(\\s|^)(#$_queryChars+)\$', unicode: true);
+
+/// Inserts an avatar's mention at the selection, or after an unfocused draft.
+void insertUserMention(TextEditingController controller, User user) {
+  final value = controller.value;
+  final selection = value.selection;
+  final start = selection.isValid ? selection.start : value.text.length;
+  final end = selection.isValid ? selection.end : start;
+  final before = value.text.substring(0, start);
+  final after = value.text.substring(end);
+  final separator = before.isEmpty || RegExp(r'\s$').hasMatch(before)
+      ? ''
+      : ' ';
+  final mention = '$before$separator${user.mention}${mentionSeparator(after)}';
+  controller.value = TextEditingValue(
+    text: mention + after,
+    selection: TextSelection.collapsed(offset: mention.length),
+  );
+}
+
+String mentionSeparator(String next) =>
+    RegExp(r'^[\s,.!?;:)\]}]').hasMatch(next) ? '' : ' ';
 
 final _wordBreak = RegExp(r'[\s\-_.,;:()\[\]/+@&|·"!?]+');
 
@@ -49,15 +69,6 @@ int? mentionRank(String query, Iterable<String?> names) {
   return best;
 }
 
-/// Bridge bots of [room] (the `bridgebot` of its bridge info): never people
-/// to mention.
-Set<String> bridgeBotIds(Room room) => {
-  for (final type in bridgeInfoStateTypes)
-    for (final state
-        in room.states[type]?.values ?? const <StrippedStateEvent>[])
-      if (state.content['bridgebot'] case final String bot) bot,
-};
-
 /// One person [mentionSuggestions] offers.
 typedef MentionCandidate = ({User user, int rank});
 
@@ -76,7 +87,7 @@ List<MentionCandidate> mentionSuggestions(
   if (limit <= 0) return const [];
   _loadMembersOnce(room);
   final own = room.client.userID;
-  final bots = bridgeBotIds(room);
+  final bots = declaredBridgeBots(room);
   final bridged = isBridgedRoom(room);
   final partner = room.directChatMatrixID;
   final found = <MentionCandidate>[];
@@ -84,7 +95,9 @@ List<MentionCandidate> mentionSuggestions(
     Membership.join,
     Membership.invite,
   ])) {
-    if (user.id == own || bots.contains(user.id)) continue;
+    if (user.id == own || isBridgeBotMember(room, user.id, declared: bots)) {
+      continue;
+    }
     final rank = mentionRank(query, [
       user.displayName,
       if (user.id == partner) privateName,

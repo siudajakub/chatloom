@@ -71,6 +71,7 @@ void main() {
   group('patterns', () {
     test('@ and # open on any script, not inside words', () {
       expect(mentionQueryPattern.firstMatch('hi @Łu')?[1], 'Łu');
+      expect(mentionQueryPattern.firstMatch('hi @Łukasz Żó')?[1], 'Łukasz Żó');
       expect(mentionQueryPattern.firstMatch('@Żan')?[1], 'Żan');
       expect(mentionQueryPattern.firstMatch('hi @')?[1], '');
       expect(mentionQueryPattern.firstMatch('mail a@b'), isNull);
@@ -148,6 +149,15 @@ void main() {
     final inserted = bar.insertSuggestion(suggestions.single);
     expect(inserted, startsWith('cześć @'));
     expect(inserted, isNot(contains('@Żan ')));
+    controller.value = const TextEditingValue(
+      text: 'cześć @Żaneta Kow, miło Cię widzieć',
+      selection: TextSelection.collapsed(offset: 17),
+    );
+    final fullName = bar.getSuggestions(controller.value).single;
+    expect(
+      bar.insertSuggestion(fullName),
+      'cześć @[Żaneta Kowalska], miło Cię widzieć',
+    );
     // `#` is not offered in a bridged chat.
     expect(
       bar.getSuggestions(

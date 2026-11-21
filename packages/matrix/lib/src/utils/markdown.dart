@@ -155,7 +155,9 @@ class BlockLatexSyntax extends BlockSyntax {
 }
 
 class PillSyntax extends InlineSyntax {
-  PillSyntax()
+  final void Function(String)? onMention;
+
+  PillSyntax(this.onMention)
     : super(
         r'([@#!][^\s:]*:(?:[^\s]+\.\w+|[\d\.]+|\[[a-fA-F0-9:]+\])(?::\d+)?)',
       );
@@ -168,6 +170,7 @@ class PillSyntax extends InlineSyntax {
       return true;
     }
     final identifier = match[1]!;
+    if (identifier.startsWith('@')) onMention?.call(identifier);
     final element = Element.text('a', htmlEscape.convert(identifier));
     element.attributes['href'] = htmlAttrEscape.convert(
       'https://matrix.to/#/$identifier',
@@ -179,18 +182,29 @@ class PillSyntax extends InlineSyntax {
 
 class MentionSyntax extends InlineSyntax {
   final String? Function(String)? getMention;
-  MentionSyntax(this.getMention) : super(r'(@(?:\[[^\]:]+\]|\w+)(?:#\w+)?)');
+  final void Function(String)? onMention;
+  MentionSyntax(this.getMention, this.onMention)
+    : super(r'(@(?:\[([^\]:\n]+)\]|(\w+))(?:#\d+)?)');
 
   @override
   bool onMatch(InlineParser parser, Match match) {
-    final mention = getMention?.call(match[1]!);
-    if ((match.start > 0 &&
-            !RegExp(r'[\s.!?:;\(]').hasMatch(match.input[match.start - 1])) ||
-        mention == null) {
+    if (match.start > 0 &&
+        !RegExp(r'[\s.!?:;,(]').hasMatch(match.input[match.start - 1])) {
       parser.addNode(Text(match[0]!));
       return true;
     }
-    final element = Element.text('a', htmlEscape.convert(match[1]!));
+    final token = match[1]!;
+    if (token == '@room') onMention?.call(token);
+    final mention = getMention?.call(token);
+    if (mention == null) {
+      parser.addNode(Text(token));
+      return true;
+    }
+    onMention?.call(mention);
+    final element = Element.text(
+      'a',
+      htmlEscape.convert('@${match[2] ?? match[3]}'),
+    );
     element.attributes['href'] = htmlAttrEscape.convert(
       'https://matrix.to/#/$mention',
     );
@@ -203,6 +217,7 @@ String markdown(
   String text, {
   Map<String, Map<String, String>> Function()? getEmotePacks,
   String? Function(String)? getMention,
+  void Function(String)? onMention,
   bool convertLinebreaks = true,
   bool enableLatex = true,
 }) {
@@ -220,8 +235,8 @@ String markdown(
       StrikethroughSyntax(),
       SpoilerSyntax(),
       EmoteSyntax(getEmotePacks),
-      PillSyntax(),
-      MentionSyntax(getMention),
+      PillSyntax(onMention),
+      MentionSyntax(getMention, onMention),
       if (enableLatex) InlineLatexSyntax(),
     ],
   );

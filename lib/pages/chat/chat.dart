@@ -46,6 +46,7 @@ import 'package:chatloom/personal/immediate_outbox.dart';
 import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
+import 'package:chatloom/personal/mention_suggestions.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/network_rejections.dart';
 import 'package:chatloom/personal/performance_probe.dart';
@@ -378,8 +379,11 @@ class ChatController extends State<ChatPageWithRoom>
   bool get isLoadingFuture => timeline?.isRequestingFuture ?? false;
 
   @override
-  void mentionSender(Event event) =>
-      sendController.text += '${event.senderFromMemoryOrFallback.mention} ';
+  void mentionSender(Event event) {
+    insertUserMention(sendController, event.senderFromMemoryOrFallback);
+    onInputBarChanged(sendController.text);
+    inputFocus.requestFocus();
+  }
 
   @override
   void Function(String eventId)? get threadOpener =>

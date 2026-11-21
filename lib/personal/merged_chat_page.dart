@@ -6,6 +6,7 @@ import 'dart:math' as math;
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/mention_suggestions.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat/chat_app_bar_list_tile.dart';
 import 'package:chatloom/pages/chat/chat_emoji_picker.dart';
@@ -1444,8 +1445,24 @@ class _MergedChatPageState extends State<_MergedChatView>
   Future<void> requestFuture({bool quiet = false}) async {}
 
   @override
-  void mentionSender(Event event) =>
-      sendController.text += '${event.senderFromMemoryOrFallback.mention} ';
+  void mentionSender(Event event) {
+    final target = _targetRoom;
+    if (target == null) return;
+    final sameSource = target.id == event.room.id;
+    final sender =
+        !sameSource && event.senderId == event.room.directChatMatrixIDForDisplay
+        ? target.directChatMatrixIDForDisplay
+        : event.senderId;
+    final user = sameSource
+        ? event.senderFromMemoryOrFallback
+        : sender == null
+        ? null
+        : target.getState(EventTypes.RoomMember, sender)?.asUser(target);
+    if (user == null || user.membership != Membership.join) return;
+    insertUserMention(sendController, user);
+    onInputBarChanged(sendController.text);
+    inputFocus.requestFocus();
+  }
 
   /// Raw message source: developer options only (CS-23), also when a
   /// deleted or unknown message row is tapped.
