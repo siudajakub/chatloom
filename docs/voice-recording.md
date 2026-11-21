@@ -62,8 +62,9 @@ for both `instagram`/`instagramgo` and `facebook`/`facebookgo` portals.
 
 The Meta routes require one matching bridge identity, a joined bridge bot,
 the user's own portal, a current `m.video` MP4 declaration, an encrypted room
-and file encryption. Capture first measures the server upload limit and
-combines it with the bridge's size, dimension and duration limits. Neither
+and file encryption. The recorder opens from known bridge state and
+uses the last measured upload limit, or a provisional 8 MiB cap. Local
+capture works offline. Upload still requires a measured server limit. Neither
 Meta route offers silent sends or Telegram's played-state/native-forward
 controls. The Telegram trust flow and native round marker remain unchanged.
 
@@ -86,6 +87,10 @@ feature state. Physical capture, native-app appearance and delivery on a real
 Instagram account remain separate acceptance checks.
 
 ### Voice notes
+
+Voice recording and saving the outgoing bubble use local state. When an
+upload fails offline, the bubble offers Retry with the same transaction ID
+and audio.
 
 The recorder picks the codec from the room's bridge capabilities
 (`com.beeper.room_features`, the `org.matrix.msc3245.voice` MIME list):

@@ -439,8 +439,7 @@ class TelegramRoundService extends ChangeNotifier
     final caps = await _preflight(route, room);
     if (caps?.allowed != true ||
         caps?.profile == null ||
-        (target.silent && caps?.silentAllowed != true) ||
-        descriptor.outgoingError(caps!.profile!) != null) {
+        (target.silent && caps?.silentAllowed != true)) {
       // No upload limit because the server could not be asked: a
       // connection problem, not a bridge that refuses rounds.
       throw ImmediateMediaRejected(
@@ -448,6 +447,10 @@ class TelegramRoundService extends ChangeNotifier
             ? 'uploadLimitUnavailable'
             : 'roundCapabilityUnavailable',
       );
+    }
+    final descriptorError = descriptor.outgoingError(caps!.profile!);
+    if (descriptorError != null) {
+      throw ImmediateMediaRejected(descriptorError);
     }
     for (final pair in [
       (target.replyEventId, BridgeFeature.reply),
@@ -491,19 +494,10 @@ class TelegramRoundService extends ChangeNotifier
     Room room, {
     RoundSendRoute? route,
     required bool silent,
-    bool requireUploadLimit = false,
   }) {
     final gate = route == null
-        ? RoundSendRoute.diagnoseRoom(
-            room,
-            silent: silent,
-            requireUploadLimit: requireUploadLimit,
-          )
-        : route.diagnose(
-            room,
-            silent: silent,
-            requireUploadLimit: requireUploadLimit,
-          );
+        ? RoundSendRoute.diagnoseRoom(room, silent: silent)
+        : route.diagnose(room, silent: silent);
     return ImmediateMediaRejected(
       gate.terminal || gate.code == RoundGateCode.uploadLimitUnknown
           ? 'round:${gate.code.name}'
@@ -559,23 +553,24 @@ class TelegramRoundService extends ChangeNotifier
         return null;
       }
       if (!context.mounted || !stillCurrent()) return null;
-      // A passing upload-limit measurement younger than [preflightReuse] is
-      // reused (capabilities are still read from current room state), so a
-      // second round in a row opens the camera without a network round trip.
-      final caps = await _preflight(route, room);
+      final bound = route.bound(room);
+      if (bound?.accountId != frozen.bridgeAccountId ||
+          bound?.stateKey != frozen.bridgeStateKey ||
+          bound?.senderId != frozen.bridgeSenderId) {
+        throw const ImmediateMediaRejected('frozenBridgeIdentityChanged');
+      }
+      // Prepare the camera from trusted room state. The durable outbox checks
+      // the actual server limit before it uploads anything.
+      final caps = route.captureCapabilities(room);
       final profile = caps?.profile;
       if (caps?.allowed != true ||
           (silent && caps?.silentAllowed != true) ||
           profile == null ||
+          !room.canSendDefaultMessages ||
           !room.encrypted ||
           !client.encryptionEnabled ||
           !client.fileEncryptionEnabled) {
-        throw _gateRejection(
-          room,
-          route: route,
-          silent: silent,
-          requireUploadLimit: true,
-        );
+        throw _gateRejection(room, route: route, silent: silent);
       }
       if (!context.mounted || !stillCurrent()) return null;
       if (gesture != null &&
@@ -585,7 +580,9 @@ class TelegramRoundService extends ChangeNotifier
           }.contains(gesture.phase)) {
         return null;
       }
-      if (!await showTrustUserInRoomDialog(context, room)) return null;
+      if (!await showTrustUserInRoomDialog(context, room, localOnly: true)) {
+        return null;
+      }
       if (!context.mounted || !stillCurrent()) return null;
       final records = await _outbox!.recoverSummaries();
       final used = records.fold(
@@ -1064,6 +1061,9 @@ class TelegramRoundService extends ChangeNotifier
       'uploadLimitUnavailable' =>
         'ChatLoom could not reach the server to check the upload limit. '
             'Check your connection and retry. $same',
+      'roundSizeLimit' =>
+        'This round video exceeds the current upload limit. '
+            'Record a shorter video or keep this one to retry later.',
       'privacySuppressed' =>
         'ChatLoom was locked or signed out, so the round video was not '
             'sent. Retry sends it now.',

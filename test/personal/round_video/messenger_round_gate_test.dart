@@ -306,6 +306,16 @@ void main() {
     expect(MessengerRoundGate.uploadLimitUnreachable(client), isTrue);
   });
 
+  test('capture keeps the Meta bridge limit when the server is offline', () {
+    final room = _room();
+    final client = room.client as _Client;
+    client.failConfig = true;
+    final route = RoundSendRoute.forRoom(room)!;
+
+    expect(route.captureCapabilities(room)!.profile!.maxSizeBytes, 4000000);
+    expect(route.capabilities(room)!.allowed, isFalse);
+  });
+
   test('round capability is the Messenger video declaration', () async {
     final room = _room();
     await MessengerRoundGate.preflight(room);

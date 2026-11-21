@@ -258,11 +258,6 @@ class RecordingViewModelState extends State<RecordingViewModel> {
     try {
       await _cleanup;
       if (!mounted || generation != _generation) return;
-      // Server configuration preloading must not turn a failed request into an
-      // unhandled asynchronous error while microphone permission is pending.
-      unawaited(
-        room.client.getConfig().then<void>((_) {}, onError: (Object _) {}),
-      );
       if (PlatformInfos.isAndroid) {
         final info = await DeviceInfoPlugin().androidInfo;
         if (!mounted || generation != _generation) return;

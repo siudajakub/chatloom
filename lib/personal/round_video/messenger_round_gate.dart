@@ -54,9 +54,13 @@ class MessengerRoundBinding {
   const MessengerRoundBinding._(this.network, this.identity, this.features);
 
   /// Current capabilities from room state and the last measured upload
-  /// limit. Without a measurement nothing is allowed.
-  RoundRouteCapabilities capabilities(Room room) {
-    final limit = MessengerRoundGate._uploadLimits[room.client];
+  /// limit. Local capture can supply a provisional bound.
+  RoundRouteCapabilities capabilities(
+    Room room, {
+    int? unmeasuredCaptureLimit,
+  }) {
+    final limit =
+        MessengerRoundGate._uploadLimits[room.client] ?? unmeasuredCaptureLimit;
     final evidence = BridgeRoomCapabilities.fromState(
       features,
     ).evidence(BridgeFeature.video, media: MessengerRoundGate._probe);

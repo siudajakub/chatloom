@@ -143,8 +143,9 @@ class TelegramRoomBinding {
   }
 
   RoundBridgeCapabilities capabilities(
-    Room room,
-  ) => RoundBridgeCapabilities.fromEvents(
+    Room room, {
+    int? unmeasuredCaptureLimit,
+  }) => RoundBridgeCapabilities.fromEvents(
     identity: identity,
     featuresEvent:
         _anchored &&
@@ -158,7 +159,8 @@ class TelegramRoomBinding {
                 true
         ? media
         : null,
-    runtimeUploadLimitBytes: _uploadLimits[room.client],
+    runtimeUploadLimitBytes:
+        _uploadLimits[room.client] ?? unmeasuredCaptureLimit,
   );
 
   static Future<RoundBridgeCapabilities?> preflight(Room room) async {
@@ -366,7 +368,7 @@ class TelegramRoomBinding {
       featuresEvent: featuresEvent,
       mediaEvent: mediaEvent,
       // Without a measurement, check the rest of the profile with a stand-in;
-      // the real limit is always re-measured by [preflight] before capture.
+      // dispatch verifies the actual limit by calling [preflight].
       runtimeUploadLimitBytes: checks['uploadLimitKnown']! ? measured : 1,
     );
     checks['profileComplete'] = caps.result.allowed && caps.profile != null;

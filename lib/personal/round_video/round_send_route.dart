@@ -34,6 +34,13 @@ sealed class RoundSendRoute {
   /// Current capabilities from room state (no network request).
   RoundRouteCapabilities? capabilities(Room room);
 
+  /// Local bounds for capture only. Dispatch must use the measured limit.
+  RoundRouteCapabilities? captureCapabilities(Room room);
+
+  /// Keeps an unmeasured recording small enough for typical homeservers.
+  /// The native encoder and bridge limits can reduce this further.
+  static const unmeasuredCaptureLimit = 8 * 1024 * 1024;
+
   /// Measures the upload limit, then returns the current capabilities.
   Future<RoundRouteCapabilities?> preflight(Room room);
 
@@ -116,6 +123,19 @@ final class TelegramRoundRoute extends RoundSendRoute {
   }
 
   @override
+  RoundRouteCapabilities? captureCapabilities(Room room) {
+    final binding = TelegramRoomBinding.of(room);
+    return binding == null
+        ? null
+        : _wrap(
+            binding.capabilities(
+              room,
+              unmeasuredCaptureLimit: RoundSendRoute.unmeasuredCaptureLimit,
+            ),
+          );
+  }
+
+  @override
   Future<RoundRouteCapabilities?> preflight(Room room) async {
     final caps = await TelegramRoomBinding.preflight(room);
     return caps == null ? null : _wrap(caps);
@@ -159,6 +179,12 @@ final class MetaRoundRoute extends RoundSendRoute {
   @override
   RoundRouteCapabilities? capabilities(Room room) =>
       MessengerRoundGate.of(room, network: network)?.capabilities(room);
+  @override
+  RoundRouteCapabilities? captureCapabilities(Room room) =>
+      MessengerRoundGate.of(room, network: network)?.capabilities(
+        room,
+        unmeasuredCaptureLimit: RoundSendRoute.unmeasuredCaptureLimit,
+      );
   @override
   Future<RoundRouteCapabilities?> preflight(Room room) =>
       MessengerRoundGate.preflight(room, network: network);

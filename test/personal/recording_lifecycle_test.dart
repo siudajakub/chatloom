@@ -161,8 +161,8 @@ class _Record extends RecordPlatform {
 }
 
 class _VoiceRoom extends Room {
-  int sends = 0;
-  bool simulateFirstAckLoss = false, nullFirstAck = false;
+  int sends = 0, serverMemberRequests = 0;
+  bool simulateFirstAckLoss = false, nullFirstAck = false, offline = false;
   final transactions = <String?>[];
   final fileNames = <String>[];
   final committed = <String, String>{};
@@ -172,6 +172,29 @@ class _VoiceRoom extends Room {
   _VoiceRoom(Client client, String id) : super(id: id, client: client);
   @override
   bool get canSendDefaultMessages => true;
+  @override
+  Future<List<User>> requestParticipants([
+    List<Membership> membershipFilter = const [
+      Membership.join,
+      Membership.invite,
+      Membership.knock,
+    ],
+    bool suppressWarning = false,
+    bool? cache,
+    bool enforceFetchFromServer = false,
+  ]) async {
+    serverMemberRequests++;
+    throw StateError('No network');
+  }
+
+  @override
+  Future<List<User>> requestParticipantsFromCache([
+    List<Membership> membershipFilter = const [
+      Membership.join,
+      Membership.invite,
+      Membership.knock,
+    ],
+  ]) async => [];
   @override
   Future<Event?> getEventById(String eventID) async => null;
   @override
@@ -193,6 +216,7 @@ class _VoiceRoom extends Room {
     sentReply = inReplyTo;
     sentThread = threadRootEventId;
     sentLastThread = threadLastEventId;
+    if (offline) throw StateError('No network');
     if (simulateFirstAckLoss) {
       // Model Matrix's idempotent room + transaction endpoint: acceptance can
       // precede a lost/null response, but a retry with the same txid is one event.
@@ -430,6 +454,47 @@ void main() {
       },
     );
   }
+
+  testWithDeadline(
+    'an encrypted voice note queues offline and retries in the same bubble',
+    (tester) async {
+      final (control, _) = await mountSend(tester);
+      final room = control.target..offline = true;
+      room.setState(
+        Event(
+          room: room,
+          eventId: r'$encryption',
+          type: EventTypes.Encryption,
+          stateKey: '',
+          senderId: room.client.userID!,
+          originServerTs: DateTime.utc(2026),
+          content: const {'algorithm': 'm.megolm.v1.aes-sha2'},
+        ),
+      );
+      expect(room.encrypted, isTrue);
+
+      expect(
+        await control.onVoiceMessageSend(
+          '/stopped-voice',
+          1000,
+          const [1024],
+          'voice.ogg',
+          readRecording: (_) async => Uint8List.fromList([0]),
+        ),
+        isTrue,
+      );
+      await tester.pump();
+
+      expect(room.serverMemberRequests, 0);
+      final txid = room.transactions.single!;
+      expect(echoes.statusOf(txid), EventStatus.error.intValue);
+      final failed = Event.fromMatrixEvent(echoes.events[txid]!, room);
+      room.offline = false;
+      final retry = await OutgoingMedia.retry(failed);
+      expect(await retry.accepted, r'$accepted-voice');
+      expect(room.transactions, [txid, txid]);
+    },
+  );
 
   testWithDeadline(
     'a voice draft whose bubble could not be stored retries with the same transaction',

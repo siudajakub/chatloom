@@ -15,12 +15,18 @@ import 'package:chatloom/widgets/avatar.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 
-Future<bool> showTrustUserInRoomDialog(BuildContext context, Room room) async {
+Future<bool> showTrustUserInRoomDialog(
+  BuildContext context,
+  Room room, {
+  bool localOnly = false,
+}) async {
   if (!room.encrypted) return true;
 
   List<User> users;
   try {
-    users = await room.requestParticipants();
+    users = localOnly
+        ? await room.requestParticipantsFromCache()
+        : await room.requestParticipants();
   } catch (error, stack) {
     // The member list could not be refreshed (offline, server error): ask
     // about the members already known. Encryption loads the list again,

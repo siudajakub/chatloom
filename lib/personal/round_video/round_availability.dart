@@ -27,7 +27,7 @@ class RoundAvailability {
 
   RoundAvailabilityKind get kind => switch (code) {
     RoundGateCode.available ||
-    // The upload limit is re-measured right before capture.
+    // Capture uses local bounds while dispatch checks the upload limit.
     RoundGateCode.uploadLimitUnknown => RoundAvailabilityKind.available,
     RoundGateCode.needsTrust => RoundAvailabilityKind.needsTrust,
     _ => RoundAvailabilityKind.unavailable,
@@ -164,6 +164,8 @@ String roundFailureMessage(Object error) {
         'Not enough room for another round video. Retry or delete unsent round videos first.',
       'sessionClosed' || 'sessionUnavailable' =>
         "Your session isn't ready. Try again in a moment.",
+      'frozenBridgeIdentityChanged' =>
+        'The bridge changed. Open the conversation again to record.',
       'roundCapabilityUnavailable' =>
         'The bridge no longer confirms round video support. Nothing was sent.',
       'frozenRelationUnavailable' =>

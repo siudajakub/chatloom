@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:typed_data';
 
+import 'package:chatloom/pages/chat/composer_notice.dart';
 import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/personal/media/outgoing_media.dart';
 import 'package:chatloom/personal/media/send_error_text.dart';
@@ -120,9 +121,8 @@ class VoiceMessageSender {
     if (!current()) return false;
     final proceed =
         await (confirmTrust?.call(target) ??
-            showTrustUserInRoomDialog(context, target));
+            showTrustUserInRoomDialog(context, target, localOnly: true));
     if (!proceed || !current() || !context.mounted) return false;
-    final scaffoldMessenger = ScaffoldMessenger.of(context);
     // A stopped recording is a local file: read it without a loader.
     Uint8List? bytes;
     try {
@@ -218,9 +218,7 @@ class VoiceMessageSender {
       attempt.accepted = true;
     } catch (e) {
       if (current() && context.mounted) {
-        scaffoldMessenger.showSnackBar(
-          SnackBar(content: Text(sendErrorText(e))),
-        );
+        ComposerNotice.show(context, sendErrorText(e));
       }
       return false;
     } finally {

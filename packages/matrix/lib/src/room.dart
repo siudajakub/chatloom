@@ -2194,6 +2194,23 @@ class Room {
     return <User>[];
   }
 
+  /// Loads known room members from local state and the database.
+  Future<List<User>> requestParticipantsFromCache([
+    List<Membership> membershipFilter = const [
+      Membership.join,
+      Membership.invite,
+      Membership.knock,
+    ],
+  ]) async {
+    if (!participantListComplete || partial) {
+      final users = await client.database.getUsers(this);
+      for (final user in users) {
+        setState(user);
+      }
+    }
+    return getParticipants(membershipFilter);
+  }
+
   /// Request the full list of participants from the server. The local list
   /// from the store is not complete if the client uses lazy loading.
   /// List `membershipFilter` defines with what membership do you want the
@@ -2213,21 +2230,13 @@ class Room {
     bool? cache,
     bool enforceFetchFromServer = false,
   ]) async {
-    if (!participantListComplete || partial) {
-      // we aren't fully loaded, maybe the users are in the database
-      // We always need to check the database in the partial case, since state
-      // events won't get written to memory in this case and someone new could
-      // have joined, while someone else left, which might lead to the same
-      // count in the completeness check.
-      final users = await client.database.getUsers(this);
-      for (final user in users) {
-        setState(user);
-      }
-    }
+    // Partial rooms reload the database even if the member count matches.
+    // A join and a leave may have changed the list without changing its size.
+    final local = await requestParticipantsFromCache(membershipFilter);
 
     // Do not request users from the server if we have already have a complete list locally.
     if (participantListComplete && !enforceFetchFromServer) {
-      return getParticipants(membershipFilter);
+      return local;
     }
 
     cache ??= encrypted;

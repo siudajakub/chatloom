@@ -7,7 +7,9 @@ import 'package:test/test.dart';
 
 import '../../../lib/personal/capabilities.dart';
 import '../../../lib/personal/round_video/round_availability.dart';
+import '../../../lib/personal/round_video/round_send_route.dart';
 import '../../../lib/personal/round_video/telegram_room_binding.dart';
+import '../../../lib/personal/round_video/upload_limit_probe.dart';
 
 const _owner = '@fixture-owner:example.invalid';
 const _bot = '@fixture-bridge:example.invalid';
@@ -156,6 +158,23 @@ Room _fixture({
 }
 
 void main() {
+  test('trusted Telegram capture has local bounds before any upload check', () {
+    final room = _fixture();
+    final client = room.client as _Client;
+    final route = RoundSendRoute.forRoom(room)!;
+
+    expect(route.capabilities(room)!.allowed, isFalse);
+    expect(
+      route.captureCapabilities(room)!.profile!.maxSizeBytes,
+      RoundSendRoute.unmeasuredCaptureLimit,
+    );
+    expect(client.configRefresh, isEmpty);
+    expect(
+      route.capabilities(room)!.allowed,
+      isFalse,
+      reason: 'Capture must not publish a provisional dispatch limit',
+    );
+  });
   test(
     'trusted portal requires same state source, own Matrix owner + bridge login',
     () async {
@@ -249,7 +268,7 @@ void main() {
     },
   );
   test(
-    'final preflight refreshes runtime limit and rejects failed refresh',
+    'preflight reuses a recent limit and rejects an offline unmeasured send',
     () async {
       final room = _fixture();
       final client = room.client as _Client;
@@ -261,9 +280,12 @@ void main() {
       client.failConfigRefresh = true;
       expect(
         (await TelegramRoomBinding.preflight(room))!.result.allowed,
+        isTrue,
+      );
+      UploadLimitProbe.forget(client);
+      expect(
+        (await TelegramRoomBinding.preflight(room))!.result.allowed,
         isFalse,
-        reason:
-            'Expired runtime limit must not survive a failed server refresh',
       );
     },
   );
