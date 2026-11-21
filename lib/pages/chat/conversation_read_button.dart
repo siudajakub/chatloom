@@ -131,6 +131,7 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
+            persist: false,
             content: const Text('Couldn’t mark as read.'),
             action: SnackBarAction(label: 'Retry', onPressed: _read),
           ),

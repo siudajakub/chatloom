@@ -210,6 +210,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
           ?..hideCurrentSnackBar()
           ..showSnackBar(
             SnackBar(
+              persist: false,
               content: Text(
                 shown.length == 1
                     ? 'The message is shown again.'
@@ -334,6 +335,7 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(archive ? 'Chat archived' : 'Chat unarchived'),
           action: SnackBarAction(
             label: 'Undo',

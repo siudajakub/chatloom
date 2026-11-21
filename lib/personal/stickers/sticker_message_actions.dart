@@ -24,6 +24,7 @@ List<ConversationMessageAction> stickerMessageActions(
   final navigatorContext = context;
   void say(String text, VoidCallback undo) => messenger?.showSnackBar(
     SnackBar(
+      persist: false,
       content: Text(text),
       action: SnackBarAction(label: 'Undo', onPressed: undo),
     ),

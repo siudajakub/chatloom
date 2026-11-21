@@ -869,6 +869,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        persist: false,
         content: const Text('This message is older than the loaded history.'),
         action: SnackBarAction(
           label: 'Open',
@@ -2450,6 +2451,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        persist: false,
         content: Text('Not sent: $reason'),
         action: SnackBarAction(label: 'Restore', onPressed: restore),
       ),
@@ -2943,6 +2945,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     if (await markConversationRead(targets) > 0 && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          persist: false,
           content: const Text('Couldn’t mark every source as read.'),
           action: SnackBarAction(label: 'Retry', onPressed: _allRead),
         ),

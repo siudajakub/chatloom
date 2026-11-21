@@ -153,7 +153,9 @@ void _say(
 }) {
   messenger
     ?..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(text), action: action));
+    ..showSnackBar(
+      SnackBar(content: Text(text), action: action, persist: false),
+    );
 }
 
 /// Runs Send later for one frozen source. [freeze] captures the source,

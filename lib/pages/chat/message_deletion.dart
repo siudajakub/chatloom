@@ -230,6 +230,7 @@ abstract final class MessageDeletions {
       refresh();
       messenger?.showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             'Couldn’t delete the message. ${humanErrorText(error)}',
           ),

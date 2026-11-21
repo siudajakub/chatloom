@@ -54,6 +54,7 @@ class _StickerSettingsPageState extends State<StickerSettingsPage> {
   void _say(String text, {VoidCallback? undo}) =>
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(text),
           action: undo == null
               ? null

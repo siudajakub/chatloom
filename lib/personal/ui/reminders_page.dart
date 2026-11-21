@@ -201,7 +201,9 @@ void _say(
 }) {
   messenger
     ?..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(text), action: action));
+    ..showSnackBar(
+      SnackBar(content: Text(text), action: action, persist: false),
+    );
 }
 
 class RemindersPage extends StatefulWidget {

@@ -96,6 +96,7 @@ class _OwnStickerPackPageState extends State<OwnStickerPackPage> {
   void _say(String text, {VoidCallback? undo}) =>
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(text),
           action: undo == null
               ? null

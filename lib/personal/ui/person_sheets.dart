@@ -236,6 +236,7 @@ Future<void> addChatsToPerson(
     ..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
+        persist: false,
         content: const Text('Added to the merged chat'),
         action: SnackBarAction(
           label: 'Undo',
@@ -283,6 +284,7 @@ Future<void> removeChatFromPerson(
     ..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
+        persist: false,
         content: Text(
           next == null ? 'Chats unmerged' : 'Removed from the merged chat',
         ),
@@ -326,6 +328,7 @@ Future<void> unmergePerson(
     ..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
+        persist: false,
         content: const Text('Chats unmerged'),
         action: SnackBarAction(
           label: 'Undo',
@@ -394,6 +397,7 @@ Future<void> replacePersonSource(
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: const Text('Chat replaced'),
           action: SnackBarAction(
             label: 'Undo',

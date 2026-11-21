@@ -157,6 +157,7 @@ class LongMessageSplitter {
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             '$network allows ${_count(limit)} characters in a message. '
             'Send this as $parts messages?',

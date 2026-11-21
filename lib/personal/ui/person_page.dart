@@ -510,6 +510,7 @@ class _PersonPageState extends State<PersonPage> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: const Text('Chat archived'),
           action: SnackBarAction(
             label: 'Undo',

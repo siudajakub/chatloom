@@ -392,6 +392,7 @@ Future<void> openEventAttachment(
   await copy?.delete();
   messenger?.showSnackBar(
     SnackBar(
+      persist: false,
       content: const Text('No app on this device can open this file.'),
       action: context.mounted
           ? SnackBarAction(label: 'Save', onPressed: () => unawaited(save()))

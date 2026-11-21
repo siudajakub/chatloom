@@ -243,6 +243,7 @@ class HiddenMessages extends ChangeNotifier {
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             network == null
                 ? 'Removed for you. Others in the chat still see it.'

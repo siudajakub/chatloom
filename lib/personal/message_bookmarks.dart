@@ -41,6 +41,7 @@ abstract final class MessageBookmarks {
       }
       messenger?.showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             remove ? 'Removed from Bookmarks' : 'Saved to Bookmarks',
           ),

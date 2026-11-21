@@ -1382,6 +1382,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(done),
           action: undo == null
               ? null
@@ -1472,6 +1473,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             plan.createsGroup ? 'Chats merged' : 'Added to the merged chat',
           ),
@@ -1507,6 +1509,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: const Text('Chats unmerged'),
           action: SnackBarAction(
             label: 'Undo',

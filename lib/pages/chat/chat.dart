@@ -2062,6 +2062,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        persist: false,
         content: Text('Not sent: $reason'),
         action: SnackBarAction(label: 'Restore', onPressed: restore),
       ),
@@ -2929,6 +2930,7 @@ class ChatController extends State<ChatPageWithRoom>
       messenger.hideCurrentSnackBar();
       messenger.showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             pinning
                 ? 'Couldn’t pin the message. ${humanErrorText(error)}'
@@ -2951,6 +2953,7 @@ class ChatController extends State<ChatPageWithRoom>
     if (!before.contains(eventId)) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
+        persist: false,
         content: const Text('Message unpinned'),
         action: SnackBarAction(
           label: 'Undo',

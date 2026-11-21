@@ -180,6 +180,7 @@ class _StickerPackSheetState extends State<StickerPackSheet> {
     Navigator.of(context).pop();
     messenger?.showSnackBar(
       SnackBar(
+        persist: false,
         content: Text('${pack.title} removed'),
         action: SnackBarAction(
           label: 'Undo',

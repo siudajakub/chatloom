@@ -79,6 +79,7 @@ Future<void> runConversationMute(
     ?..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
+        persist: false,
         content: Text(text),
         action: undo == null
             ? null

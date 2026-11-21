@@ -80,6 +80,7 @@ class _PeopleSettingsSectionState extends State<PeopleSettingsSection> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
+          persist: false,
           content: Text(
             plan.createsGroup ? 'Chats merged' : 'Added to the merged chat',
           ),
