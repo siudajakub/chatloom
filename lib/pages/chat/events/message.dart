@@ -96,10 +96,14 @@ class Message extends StatelessWidget {
   /// draws the whole grid, a hidden member draws nothing (its row stays for
   /// list indexes and scroll targets); null for an ordinary message.
   final MediaAlbumSlot? album;
+  final Widget? readerAvatars;
+  final RoomReadReceipts? receiptSource;
 
   const Message(
     this.event, {
     this.album,
+    this.readerAvatars,
+    this.receiptSource,
     this.nextEvent,
     this.previousEvent,
     this.displayReadMarker = false,
@@ -307,6 +311,8 @@ class Message extends StatelessWidget {
                   event: event,
                   timeline: timeline,
                   progress: ticks,
+                  readAvatars: readerAvatars != null,
+                  receiptSource: receiptSource,
                   color: roundVideoOnScrim,
                   readColor: NotionContrast.readable(
                     NotionMediaColors.stageScrim.withValues(alpha: 1),
@@ -342,6 +348,7 @@ class Message extends StatelessWidget {
     // (default), every message, or none. Ticks stay on the group's last.
     final timeShown = displayPrefs.showsTime(last: last);
     final ticksShown = last && showsTicks;
+    final standaloneTick = ticksShown && !timeShown && !edited && !sending;
     final timeVisible = timeShown || edited || ticksShown;
     final hasStatus = timeVisible || sending;
     // Photos, videos, voice and files fill a ring with their upload.
@@ -392,8 +399,11 @@ class Message extends StatelessWidget {
                 event: event,
                 timeline: timeline,
                 progress: ticks,
+                readAvatars: readerAvatars != null,
+                receiptSource: receiptSource,
                 clock: !upload,
                 color: statusColor,
+                backdrop: standaloneTick ? metaBackdrop : null,
                 readColor: NotionContrast.readable(
                   pageBackground,
                   context.notion.colors.accent,
@@ -554,7 +564,7 @@ class Message extends StatelessWidget {
                     if (!round && hasStatus)
                       timeVisible
                           ? ConversationMetaChip(
-                              backdrop: metaBackdrop,
+                              backdrop: standaloneTick ? null : metaBackdrop,
                               child: status,
                             )
                           // Only "Sending…": the chip itself waits.
@@ -571,6 +581,7 @@ class Message extends StatelessWidget {
                         delivery: delivery,
                         backdrop: metaBackdrop,
                       ),
+                    ?readerAvatars,
                     ConversationReactionFeedback(event, timeline),
                     if (enterThread != null && threads.isNotEmpty)
                       TextButton.icon(

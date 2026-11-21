@@ -17,6 +17,7 @@ import 'package:chatloom/pages/chat/events/message.dart';
 import 'package:chatloom/pages/chat/media_album.dart';
 import 'package:chatloom/pages/chat/seen_by_row.dart';
 import 'package:chatloom/pages/chat/typing_indicators.dart';
+import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/media/media_prefetcher.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -56,6 +57,7 @@ class _ChatEventListState extends State<ChatEventList>
     with TickerProviderStateMixin {
   ConversationTimelineSource get controller => widget.controller;
   bool _textSelectionActive = false;
+  RoomReadReceipts? _threadReceipts;
 
   /// Opening a chat builds only what is visible plus a small margin; once the
   /// route has settled the cache widens so rows above the viewport are built
@@ -416,6 +418,19 @@ class _ChatEventListState extends State<ChatEventList>
           event.eventId == controller.readMarkerEventId ||
           _hasFooterContent(event),
     );
+    final display = NotionDisplayPreferences.of(context);
+    final threadId = controller.activeThreadId;
+    final currentRoom = controller.room;
+    if (threadId == null) {
+      _threadReceipts = null;
+    } else if (_threadReceipts?.threadId != threadId ||
+        !identical(_threadReceipts?.room, currentRoom)) {
+      _threadReceipts = RoomReadReceipts.forThread(currentRoom, threadId);
+    }
+    final threadReceipts = _threadReceipts;
+    final seenBy = display.deliveryTicks
+        ? SeenByPositions(events, albums, controller.timelineFor)
+        : null;
     // One palette lookup per list build instead of one per row.
     _listenPersonal();
     final roomPalette = controller.conversationPalette;
@@ -427,6 +442,7 @@ class _ChatEventListState extends State<ChatEventList>
           context,
           controller.room.client.applicationAccountConfig,
           theme: roomPalette.theme,
+          display: display,
         ).hasWallpaper;
 
     // The unread divider sits above the oldest unread row: just newer than
@@ -473,7 +489,7 @@ class _ChatEventListState extends State<ChatEventList>
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
           childrenDelegate: SliverChildBuilderDelegate(
             (BuildContext context, int i) {
-              // Footer to display typing indicator and read receipts:
+              // Footer for typing, encryption and the composer spacer.
               if (i == 0) {
                 final spacer = _ComposerSpacer(
                   inset: controller.composerInset,
@@ -525,7 +541,6 @@ class _ChatEventListState extends State<ChatEventList>
                 return Column(
                   mainAxisSize: .min,
                   children: [
-                    if (events.isNotEmpty) SeenByRow(event: events.first),
                     TypingIndicators(controller),
                     EncryptionInfo(room: controller.room),
                     spacer,
@@ -632,6 +647,16 @@ class _ChatEventListState extends State<ChatEventList>
                       Message(
                         event,
                         album: album,
+                        receiptSource: threadReceipts,
+                        readerAvatars:
+                            seenBy != null && SeenByPositions.isAnchor(event)
+                            ? SeenByRow(
+                                key: ValueKey(threadId),
+                                event: event,
+                                positions: seenBy,
+                                source: threadReceipts,
+                              )
+                            : null,
                         bigEmojis: controller.bigEmojis,
                         onSwipe: () => controller.replyAction(replyTo: event),
                         onInfoTab: controller.showEventInfo,

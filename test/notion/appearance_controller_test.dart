@@ -294,7 +294,7 @@ void main() {
       await tapText('Pure black');
       await tapText('Two-line previews');
       await tapText('Sender names');
-      await tapText('Delivery ticks');
+      await tapText('Delivery and read indicators');
       await tapText('Haptic feedback');
       var stored = ThemeBuilder.readDisplayPreferences(preferences);
       expect(stored.trueBlack, isTrue);

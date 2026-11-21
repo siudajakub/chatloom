@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
@@ -21,6 +22,9 @@ class MessageDeliveryTicks extends StatelessWidget {
     this.color,
     this.readColor,
     this.clock = true,
+    this.backdrop,
+    this.readAvatars = false,
+    this.receiptSource,
   });
 
   final Event event;
@@ -28,17 +32,22 @@ class MessageDeliveryTicks extends StatelessWidget {
   final DeliveryProgress progress;
   final Color? color;
   final Color? readColor;
+  final Color? backdrop;
 
   /// Show the clock while sending; false when an upload ring already shows
   /// the progress (the slot stays, so the ✓ still grows in place).
   final bool clock;
+  final bool readAvatars;
+  final RoomReadReceipts? receiptSource;
 
   @override
   Widget build(BuildContext context) {
     final settled =
         progress == DeliveryProgress.sent ||
         progress == DeliveryProgress.delivered;
-    final receipts = settled ? RoomReadReceipts.of(event.room) : null;
+    final receipts = settled
+        ? receiptSource ?? RoomReadReceipts.of(event.room)
+        : null;
     return ListenableBuilder(
       listenable: receipts ?? const _Unchanging(),
       builder: (context, _) {
@@ -47,7 +56,9 @@ class MessageDeliveryTicks extends StatelessWidget {
           return tick == null ? const SizedBox.shrink() : _tick(tick);
         }
         final snapshot = receipts.snapshotOf(timeline);
-        final state = snapshot.isRead(event)
+        final read = snapshot.isRead(event);
+        if (read && readAvatars) return const SizedBox.shrink();
+        final state = read
             ? NotionDeliveryState.read
             : progress == DeliveryProgress.delivered ||
                   snapshot.isAcknowledged(event)
@@ -58,14 +69,17 @@ class MessageDeliveryTicks extends StatelessWidget {
     );
   }
 
-  Widget _tick(NotionDeliveryState state) => NotionDeliveryTick(
-    key: const ValueKey('message-delivery-tick'),
-    state: state,
-    color: color,
-    readColor: readColor,
-    sendingClock: clock
-        ? NotionSendingClock.delayed
-        : NotionSendingClock.hidden,
+  Widget _tick(NotionDeliveryState state) => ConversationMetaChip(
+    backdrop: backdrop,
+    child: NotionDeliveryTick(
+      key: const ValueKey('message-delivery-tick'),
+      state: state,
+      color: color,
+      readColor: readColor,
+      sendingClock: clock
+          ? NotionSendingClock.delayed
+          : NotionSendingClock.hidden,
+    ),
   );
 }
 

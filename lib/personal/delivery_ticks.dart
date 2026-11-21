@@ -25,6 +25,7 @@ library;
 
 import 'dart:async';
 
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/own_sender.dart';
 import 'package:chatloom/ui/notion/notion_delivery_tick.dart';
@@ -110,6 +111,7 @@ class ReceiptTargets {
   const ReceiptTargets({
     this.read = const {},
     this.acknowledged = const {},
+    this.readersAt = const {},
     this.newestRead,
   });
 
@@ -118,6 +120,9 @@ class ReceiptTargets {
 
   /// Events a bridge bot marked: delivered to the network.
   final Set<String> acknowledged;
+
+  /// Public reader IDs grouped by their receipt event.
+  final Map<String, Set<String>> readersAt;
 
   /// Time of the newest reader receipt (for history windows that do not
   /// contain its event).
@@ -128,26 +133,30 @@ class ReceiptTargets {
   /// Collected from [room]'s stored receipt state (main timeline and
   /// unthreaded receipts). Never the account, its own ghosts or the
   /// bridge bots as readers.
-  factory ReceiptTargets.of(Room room) {
+  factory ReceiptTargets.of(Room room, {String? threadId}) {
     final client = room.client;
     final own = client.userID;
     final state = room.receiptState;
-    final others = [state.global.otherUsers, ?state.mainThread?.otherUsers];
+    final others = threadId == null
+        ? [state.global.otherUsers, ?state.mainThread?.otherUsers]
+        : [?state.byThread[threadId]?.otherUsers];
     if (others.every((users) => users.isEmpty)) return empty;
     final bots = bridgeBotsOf(room);
     final resolver = OwnSenderResolver.of(client);
     final read = <String>{};
+    final readersAt = <String, Set<String>>{};
     final acknowledged = <String>{};
     DateTime? newest;
     for (final users in others) {
       for (final MapEntry(key: user, value: receipt) in users.entries) {
         if (user == own) continue;
-        if (bots.contains(user)) {
+        if (isBridgeBotMember(room, user, declared: bots)) {
           acknowledged.add(receipt.eventId);
           continue;
         }
         if (resolver.isOwnSender(user, roomId: room.id)) continue;
         read.add(receipt.eventId);
+        readersAt.putIfAbsent(receipt.eventId, () => {}).add(user);
         final at = receipt.timestamp;
         if (newest == null || at.isAfter(newest)) newest = at;
       }
@@ -155,6 +164,7 @@ class ReceiptTargets {
     return ReceiptTargets(
       read: read,
       acknowledged: acknowledged,
+      readersAt: readersAt,
       newestRead: newest,
     );
   }
@@ -164,6 +174,10 @@ class ReceiptTargets {
       other is ReceiptTargets &&
       other.newestRead == newestRead &&
       setEquals(other.read, read) &&
+      other.readersAt.length == readersAt.length &&
+      readersAt.entries.every(
+        (entry) => setEquals(entry.value, other.readersAt[entry.key]),
+      ) &&
       setEquals(other.acknowledged, acknowledged);
 
   @override
@@ -232,7 +246,10 @@ class ReceiptSnapshot {
 /// syncs and notifies when the targets of other members' receipts changed
 /// (the account's own receipts never notify).
 class RoomReadReceipts extends ChangeNotifier {
-  RoomReadReceipts._(this.room);
+  RoomReadReceipts._(this.room) : threadId = null;
+
+  /// Scoped to the open thread and released when its timeline closes.
+  RoomReadReceipts.forThread(this.room, String this.threadId);
 
   static final _rooms = Expando<RoomReadReceipts>('room read receipts');
 
@@ -240,6 +257,7 @@ class RoomReadReceipts extends ChangeNotifier {
       _rooms[room] ??= RoomReadReceipts._(room);
 
   final Room room;
+  final String? threadId;
   StreamSubscription<SyncUpdate>? _sync;
   ReceiptTargets? _targets;
   ({Timeline timeline, int length, String? first, String? last})? _key;
@@ -251,8 +269,8 @@ class RoomReadReceipts extends ChangeNotifier {
 
   /// Current targets; tracked live while listened to, read fresh otherwise.
   ReceiptTargets get targets => _sync != null
-      ? _targets ??= ReceiptTargets.of(room)
-      : ReceiptTargets.of(room);
+      ? _targets ??= ReceiptTargets.of(room, threadId: threadId)
+      : ReceiptTargets.of(room, threadId: threadId);
 
   /// The snapshot of [timeline] (cached until its window or the receipts
   /// change, so every bubble of one build shares it).
@@ -293,7 +311,7 @@ class RoomReadReceipts extends ChangeNotifier {
   }
 
   void _start() {
-    _targets = ReceiptTargets.of(room);
+    _targets = ReceiptTargets.of(room, threadId: threadId);
     _key = null;
     _snapshot = null;
     _sync = room.client.onSync.stream.listen(_onSync, onError: (_) {});
@@ -318,7 +336,7 @@ class RoomReadReceipts extends ChangeNotifier {
   /// Re-reads the receipt state and notifies when it moved (also called by
   /// tests after injecting receipts).
   void refresh() {
-    final next = ReceiptTargets.of(room);
+    final next = ReceiptTargets.of(room, threadId: threadId);
     if (next == _targets) return;
     _targets = next;
     _key = null;

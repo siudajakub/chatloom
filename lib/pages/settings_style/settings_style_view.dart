@@ -817,8 +817,8 @@ class _DisplaySettings extends StatelessWidget {
           (v) => update(value.copyWith(senderNames: v)),
         ),
         toggle(
-          'Delivery ticks',
-          'Show sent, delivered and read under your messages',
+          'Delivery and read indicators',
+          'Show delivery status and who has seen your messages',
           value.deliveryTicks,
           (v) => update(value.copyWith(deliveryTicks: v)),
         ),
