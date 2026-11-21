@@ -286,6 +286,167 @@ void main() {
     expect(bridgeServiceNotice(ownText), isNull);
   });
 
+  test('bridge calls retain the type and any reported outcome', () {
+    final telegram = _room('telegram');
+    const outcomes = {
+      'Call missed': BridgeCallOutcome.missed,
+      'Call rejected': BridgeCallOutcome.rejected,
+      'Call disconnected': BridgeCallOutcome.disconnected,
+      'Video call ended (1 hour, 2 minutes and 3 seconds)':
+          BridgeCallOutcome.ended,
+    };
+    for (final MapEntry(key: body, value: outcome) in outcomes.entries) {
+      final event = _event(
+        telegram,
+        EventTypes.Message,
+        {'msgtype': MessageTypes.Notice, 'body': body},
+        key: null,
+        sender: _owner,
+      );
+      final call = bridgeCallNotice(event)!;
+      final video = body.startsWith('Video');
+      expect(call.kind, video ? BridgeCallKind.video : BridgeCallKind.voice);
+      expect(call.outcome, outcome);
+      expect(
+        call.duration,
+        video ? const Duration(hours: 1, minutes: 2, seconds: 3) : null,
+      );
+      expect(personalEventPreview(event), body);
+    }
+    final instagram = _event(
+      _room('instagram'),
+      EventTypes.Message,
+      {
+        'msgtype': MessageTypes.Notice,
+        'body': 'Video call ended\n1 minute',
+        'com.beeper.action_message': {'type': 'call', 'call_type': 'video'},
+      },
+      key: null,
+      sender: _contact,
+    );
+    expect(bridgeServiceNotice(instagram)?.icon, Icons.videocam_outlined);
+    expect(bridgeServiceNotice(instagram)?.text, 'Video call ended 1 minute');
+    expect(bridgeCallNotice(instagram)?.duration, const Duration(minutes: 1));
+    final messenger = _event(
+      _room('messenger'),
+      EventTypes.Message,
+      {
+        'msgtype': MessageTypes.Text,
+        'body': 'Missed audio call',
+        'com.beeper.action_message': {'type': 'call', 'call_type': 'voice'},
+      },
+      key: null,
+      sender: _contact,
+    );
+    expect(bridgeServiceNotice(messenger)?.text, 'Missed audio call');
+    expect(bridgeCallNotice(messenger)?.outcome, BridgeCallOutcome.missed);
+    final slack = _room('slack');
+    final huddle = _event(slack, EventTypes.Message, {
+      'msgtype': MessageTypes.Notice,
+      'body': 'Huddle ended',
+    }, key: null);
+    expect(bridgeServiceNotice(huddle)?.isCall, isTrue);
+    final start = _event(slack, EventTypes.Message, {
+      'msgtype': MessageTypes.Notice,
+      'body':
+          'Huddle started\n\nJoin via the Slack app: https://example.invalid',
+      'format': 'org.matrix.custom.html',
+      'formatted_body': 'Huddle started with a link',
+    }, key: null);
+    expect(bridgeServiceNotice(start), isNull);
+  });
+
+  test('structured call details retain the facts supplied by the bridge', () {
+    final whatsapp = _room('whatsapp');
+    final event = _event(
+      whatsapp,
+      EventTypes.Message,
+      {
+        'msgtype': MessageTypes.Text,
+        'body': 'Localized label from the network',
+        'com.beeper.action_message': {'type': 'call'},
+        'com.chatloom.call': {
+          'call_type': 'video',
+          'status': 'answered',
+          'direction': 'outgoing',
+          'duration_seconds': 127,
+        },
+      },
+      key: null,
+      sender: _owner,
+    );
+    final call = bridgeCallNotice(event)!;
+    expect(call.network, 'WhatsApp');
+    expect(call.kind, BridgeCallKind.video);
+    expect(call.outcome, BridgeCallOutcome.answered);
+    expect(call.direction, BridgeCallDirection.outgoing);
+    expect(call.duration, const Duration(minutes: 2, seconds: 7));
+
+    final unknown = _event(_room('instagram'), EventTypes.Message, {
+      'msgtype': MessageTypes.Notice,
+      'body': 'Localized label from the network',
+      'com.beeper.action_message': {'type': 'call', 'call_type': 'video'},
+      'com.chatloom.call': {'duration_seconds': -1, 'status': 'unexpected'},
+    }, key: null);
+    final unreported = bridgeCallNotice(unknown)!;
+    expect(unreported.kind, BridgeCallKind.video);
+    expect(unreported.outcome, BridgeCallOutcome.unknown);
+    expect(unreported.direction, isNull);
+    expect(unreported.duration, isNull);
+  });
+
+  test(
+    'tagged Messenger history reports clock durations and explicit zero',
+    () {
+      final messenger = _room('messenger');
+      for (final (body, duration) in [
+        ('Video call (0:00)', Duration.zero),
+        (
+          'Video call (1:02:03)',
+          const Duration(hours: 1, minutes: 2, seconds: 3),
+        ),
+      ]) {
+        final event = _event(messenger, EventTypes.Message, {
+          'msgtype': MessageTypes.Text,
+          'body': body,
+          'com.beeper.action_message': {'type': 'call', 'call_type': 'video'},
+        }, key: null);
+        final call = bridgeCallNotice(event)!;
+        expect(call.outcome, BridgeCallOutcome.ended);
+        expect(call.duration, duration);
+      }
+    },
+  );
+
+  test(
+    'ordinary text, native Matrix and deleted calls keep their own paths',
+    () {
+      final telegram = _room('telegram');
+      final body = {'body': 'Call missed', 'msgtype': MessageTypes.Text};
+      expect(
+        bridgeServiceNotice(
+          _event(telegram, EventTypes.Message, body, key: null),
+        ),
+        isNull,
+      );
+      final tagged = {
+        ...body,
+        'com.beeper.action_message': {'type': 'call'},
+      };
+      expect(
+        bridgeServiceNotice(
+          _event(_room('matrix'), EventTypes.Message, tagged, key: null),
+        ),
+        isNull,
+      );
+      final call = _event(telegram, EventTypes.Message, tagged, key: null);
+      call.setRedactionEvent(
+        _event(telegram, EventTypes.Redaction, {}, key: null),
+      );
+      expect(bridgeServiceNotice(call), isNull);
+    },
+  );
+
   testWidgets('state row renders readable remote action and no technical row', (
     tester,
   ) async {
