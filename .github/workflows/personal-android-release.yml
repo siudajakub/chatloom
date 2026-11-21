@@ -51,6 +51,15 @@ jobs:
             ~/.pub-cache
           key: android-release-${{ hashFiles('pubspec.lock', 'android/**/*.gradle.kts', 'android/gradle.properties') }}
           restore-keys: android-release-
+      - name: Resolve pinned dependencies
+        run: flutter pub get --enforce-lockfile
+      - name: Composer and recorder regressions
+        run: >-
+          flutter test --no-pub
+          test/notion/composer_dictation_layout_test.dart
+          test/notion/dictation_dialog_test.dart
+          test/personal/round_video/round_video_recorder_controls_test.dart
+          test/personal/recording_lifecycle_test.dart
       - name: Private build inputs
         shell: bash
         env:

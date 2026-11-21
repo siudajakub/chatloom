@@ -48,6 +48,9 @@ jobs:
         run: >-
           flutter test --no-pub
           test/personal/macos_desktop_test.dart
+          test/notion/composer_dictation_layout_test.dart
+          test/notion/dictation_dialog_test.dart
+          test/personal/round_video/round_video_recorder_controls_test.dart
           test/notion/composer_clipboard_test.dart
           test/personal/round_video/macos_round_backend_test.dart
           test/personal/round_video/round_capture_controller_test.dart
