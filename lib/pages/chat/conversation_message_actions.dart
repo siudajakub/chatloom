@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:chatloom/config/setting_keys.dart';
+import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -561,6 +562,10 @@ abstract final class ConversationMessageActions {
       !event.redacted &&
       RoundVideoDescriptor.fromContent(event.content) == null &&
       _editableTypes.contains(event.messageType) &&
+      bridgeCallNotice(
+            timeline == null ? event : event.getDisplayEvent(timeline),
+          ) ==
+          null &&
       networkAllows(
         BridgeFeature.edit,
         event,

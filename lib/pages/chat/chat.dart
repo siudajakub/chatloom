@@ -36,6 +36,7 @@ import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/pages/chat/utils/web_file_to_x_file.dart';
 import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/composer_commands.dart';
@@ -2749,7 +2750,10 @@ class ChatController extends State<ChatPageWithRoom>
 
   void _startEditingEvent(Event event) {
     final timeline = this.timeline;
-    if (timeline == null) return;
+    if (timeline == null ||
+        bridgeCallNotice(event.getDisplayEvent(timeline)) != null) {
+      return;
+    }
 
     final client = currentRoomBundle.firstWhere(
       (c) => c?.userID == event.senderId,
@@ -2788,7 +2792,8 @@ class ChatController extends State<ChatPageWithRoom>
           e.messageType == MessageTypes.Text &&
           e.status.isSent &&
           !e.redacted &&
-          currentRoomBundle.any((c) => c?.userID == e.senderId),
+          currentRoomBundle.any((c) => c?.userID == e.senderId) &&
+          bridgeCallNotice(e.getDisplayEvent(timeline)) == null,
     );
 
     if (lastOwnMessage == null) return;

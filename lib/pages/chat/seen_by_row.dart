@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/pages/chat/media_album.dart';
+import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
 import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -41,7 +42,8 @@ class SeenByPositions {
           event.type == EventTypes.Sticker ||
           event.type == PollEventContent.startType) &&
       event.messageType != EventTypes.KeyVerificationRequest &&
-      event.messageType != MessageTypes.Notice;
+      event.messageType != MessageTypes.Notice &&
+      bridgeCallNotice(event) == null;
 
   List<String> readersOf(Event event, ReceiptTargets targets) =>
       _sources[event.room]?.readersOf(event.eventId, targets) ?? const [];
