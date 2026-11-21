@@ -602,51 +602,47 @@ void main() {
       TargetPlatform.android: [
         'HapticFeedbackType.lightImpact',
         null,
-        null,
         'HapticFeedbackType.heavyImpact',
       ],
       TargetPlatform.iOS: [
         'HapticFeedbackType.lightImpact',
         'HapticFeedbackType.lightImpact',
-        'HapticFeedbackType.mediumImpact',
         'HapticFeedbackType.selectionClick',
       ],
       TargetPlatform.macOS: [
         'HapticFeedbackType.lightImpact',
         'HapticFeedbackType.lightImpact',
-        'HapticFeedbackType.mediumImpact',
         'HapticFeedbackType.selectionClick',
       ],
     };
     for (final MapEntry(key: platform, value: expected) in mapping.entries) {
-      testWidgets('NotionHaptics on ${platform.name}: send, long-press, '
-          'record start, selection', (tester) async {
-        debugDefaultTargetPlatformOverride = platform;
-        addTearDown(() => debugDefaultTargetPlatformOverride = null);
-        final calls = <Object?>[];
-        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
-          (call) async {
-            if (call.method == 'HapticFeedback.vibrate') {
-              calls.add(call.arguments);
-            }
-            return null;
-          },
-        );
-        addTearDown(
-          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      testWidgets(
+        'NotionHaptics on ${platform.name}: send, long-press, selection',
+        (tester) async {
+          debugDefaultTargetPlatformOverride = platform;
+          addTearDown(() => debugDefaultTargetPlatformOverride = null);
+          final calls = <Object?>[];
+          tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
             SystemChannels.platform,
-            null,
-          ),
-        );
-        NotionHaptics.send();
-        NotionHaptics.longPress();
-        NotionHaptics.recordStart();
-        NotionHaptics.selection();
-        await tester.pump();
-        expect(calls, expected);
-        debugDefaultTargetPlatformOverride = null;
-      });
+            (call) async {
+              if (call.method == 'HapticFeedback.vibrate') {
+                calls.add(call.arguments);
+              }
+              return null;
+            },
+          );
+          addTearDown(
+            () => tester.binding.defaultBinaryMessenger
+                .setMockMethodCallHandler(SystemChannels.platform, null),
+          );
+          NotionHaptics.send();
+          NotionHaptics.longPress();
+          NotionHaptics.selection();
+          await tester.pump();
+          expect(calls, expected);
+          debugDefaultTargetPlatformOverride = null;
+        },
+      );
     }
 
     testWidgets('NotionHaptics stays silent while disabled', (tester) async {
@@ -670,7 +666,6 @@ void main() {
       NotionHaptics.enabled = false;
       NotionHaptics.send();
       NotionHaptics.longPress();
-      NotionHaptics.recordStart();
       NotionHaptics.selection();
       await tester.pump();
       expect(calls, isEmpty);

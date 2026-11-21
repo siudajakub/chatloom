@@ -161,11 +161,12 @@ void main() {
     WidgetTester tester,
     RecorderFixture fixture, {
     double width = 390,
+    double height = 844,
     double textScale = 1,
     Widget Function(MediaAccess access)? recorder,
     NotionGlassMode glass = NotionGlassMode.auto,
   }) async {
-    tester.view.physicalSize = Size(width, 844);
+    tester.view.physicalSize = Size(width, height);
     tester.view.devicePixelRatio = 1;
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -232,8 +233,16 @@ void main() {
     RecorderFixture fixture,
     RoundCaptureGestureController gesture, {
     NotionGlassMode glass = NotionGlassMode.auto,
+    double width = 390,
+    double height = 844,
   }) async {
-    final access = await mount(tester, fixture, glass: glass);
+    final access = await mount(
+      tester,
+      fixture,
+      glass: glass,
+      width: width,
+      height: height,
+    );
     final outcome = Outcome();
     unawaited(
       showRoundVideoRecorder(
@@ -304,6 +313,28 @@ void main() {
       }
     });
   }
+
+  testWidgets('held round keeps a square camera on a short screen', (
+    tester,
+  ) async {
+    final fixture = RecorderFixture(controlsAvailable: true);
+    final gesture = RoundCaptureGestureController(
+      held: true,
+      // The recording strip and opened keyboard can put the button high up.
+      anchor: const Rect.fromLTWH(260, 130, 100, 48),
+    );
+    addTearDown(gesture.dispose);
+    await openHeld(tester, fixture, gesture, width: 420, height: 300);
+    final circle = find.byKey(const Key('round_camera_circle'));
+    final liveSize = tester.getSize(circle);
+    expect(liveSize.width, greaterThan(100));
+    expect(liveSize.height, liveSize.width);
+
+    gesture.lock();
+    await tester.pump();
+    expect(tester.getSize(circle), liveSize);
+    await close(tester, fixture);
+  });
 
   testWidgets(
     'unsupported camera controls are disabled; the front camera offers a screen flash',

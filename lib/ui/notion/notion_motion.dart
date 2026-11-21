@@ -424,15 +424,6 @@ abstract final class NotionHaptics {
     );
   }
 
-  /// A voice/round recording started (the hold became a recording).
-  /// Android: the same long-press buzz; elsewhere a medium impact.
-  static void recordStart() {
-    if (!enabled) return;
-    unawaited(
-      _android ? HapticFeedback.vibrate() : HapticFeedback.mediumImpact(),
-    );
-  }
-
   /// A selection tick: the finger moved onto another choice while scrubbing
   /// (reaction bar, swipe-to-reply arming). Fires once per change, never per
   /// frame.

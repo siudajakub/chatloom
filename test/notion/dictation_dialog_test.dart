@@ -168,7 +168,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('0:18'), findsOneWidget);
     expect(find.text('Recording paused'), findsOneWidget);
-    await tester.tap(find.text('Resume recording'));
+    await tester.tap(find.byTooltip('Resume recording'));
     expect(resumes, 1);
     expect(sends, 0);
   });

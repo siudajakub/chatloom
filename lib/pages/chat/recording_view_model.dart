@@ -343,7 +343,6 @@ class RecordingViewModelState extends State<RecordingViewModel> {
       setState(() => duration = Duration.zero);
       _subscribe();
       _listenToRecorderState(generation, session);
-      NotionHaptics.recordStart();
     } catch (_) {
       if (mounted && generation == _generation) {
         _showError();

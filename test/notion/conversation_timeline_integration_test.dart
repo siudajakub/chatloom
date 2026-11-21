@@ -312,11 +312,8 @@ void main() {
     },
   );
   testWidgets(
-    'ordinary plus opens the attach menu directly; emoji stays one tap',
+    'ordinary plus opens the inline attachment strip; emoji stays one tap',
     (tester) async {
-      // The desktop anchored menu; phones use the sheet (test below).
-      ChatInputRow.debugAttachSheet = false;
-      addTearDown(() => ChatInputRow.debugAttachSheet = null);
       final client = ConversationClient();
       final room = ConversationRoom(client, '!input:example.invalid');
       final controller = _ComposerController(room);
@@ -335,22 +332,19 @@ void main() {
       expect(find.byTooltip('Emoji picker').hitTestable(), findsOneWidget);
       await tester.tap(find.byTooltip('Attach media or a file'));
       await tester.pumpAndSettle();
-      // A glass menu above the composer, not a bottom sheet.
       expect(find.byType(BottomSheet), findsNothing);
-      expect(find.byType(NotionGlassPanel), findsOneWidget);
+      expect(find.byType(NotionGlassPanel), findsNothing);
       // Send later lives in the conversation menu and on Send's long press.
       expect(find.text('Send later'), findsNothing);
       final l10n = L10n.of(tester.element(find.byType(ChatInputRow)));
       final file = l10n.sendFile;
-      // Library media (photo and video together), then structured content.
-      final order = [
-        'Photo or video',
-        file,
-        l10n.startPoll,
-      ].map((label) => tester.getCenter(find.text(label)).dy).toList();
-      for (var i = 1; i < order.length; i++) {
-        expect(order[i], greaterThan(order[i - 1]));
-      }
+      final gallery = find.text('Photo or video');
+      final fileChoice = find.text(file);
+      expect(tester.getCenter(gallery).dy, tester.getCenter(fileChoice).dy);
+      expect(
+        tester.getCenter(gallery).dx,
+        lessThan(tester.getCenter(fileChoice).dx),
+      );
       expect(find.text(l10n.sendImage), findsNothing);
       expect(find.text(l10n.sendVideo), findsNothing);
       expect(find.text('Record a round video silently'), findsNothing);
@@ -379,10 +373,8 @@ void main() {
     },
   );
   testWidgets(
-    'phone attach sheet stays at the bottom when the keyboard closes',
+    'attachment strip follows the composer and preserves the keyboard focus',
     (tester) async {
-      ChatInputRow.debugAttachSheet = true;
-      addTearDown(() => ChatInputRow.debugAttachSheet = null);
       // The soft keyboard is open: the composer sits above it.
       tester.view.viewInsets = const FakeViewPadding(bottom: 900);
       addTearDown(tester.view.resetViewInsets);
@@ -403,25 +395,23 @@ void main() {
         ),
         client,
       );
+      final editor = find.byType(EditableText);
+      await tester.showKeyboard(editor);
+      final editorState = tester.state(editor);
       await tester.tap(find.byTooltip('Attach media or a file'));
       await tester.pumpAndSettle();
-      final sheet = find.byType(BottomSheet);
-      expect(sheet, findsOneWidget);
-      final screen = tester.view.physicalSize / tester.view.devicePixelRatio;
-      final open = tester.getRect(sheet);
-      expect(open.bottom, moreOrLessEquals(screen.height, epsilon: 1));
-      // The sheet route takes focus and the keyboard closes; the composer
-      // drops, the sheet must not stay where the composer was.
+      final gallery = find.text('Photo or video');
+      final open = tester.getCenter(gallery);
+      expect(open.dy, lessThan(tester.getTopLeft(editor).dy));
+      expect(controller.inputFocus.hasFocus, isTrue);
       tester.view.resetViewInsets();
       await tester.pumpAndSettle();
-      expect(tester.getRect(sheet), open);
-      expect(find.text('Photo or video'), findsOneWidget);
+      expect(tester.getCenter(gallery).dy, greaterThan(open.dy));
       expect(
-        find.text(
-          L10n.of(tester.element(find.byType(ChatInputRow))).sendFile,
-        ),
-        findsOneWidget,
+        tester.getCenter(gallery).dy,
+        lessThan(tester.getTopLeft(editor).dy),
       );
+      expect(tester.state(editor), same(editorState));
       await tester.tap(find.text('Photo or video'));
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);

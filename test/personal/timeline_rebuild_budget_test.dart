@@ -352,7 +352,7 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         controller.emojiPickerAction();
         await tester.pump(const Duration(milliseconds: 400));
-        // UX-02: "+" opens the attach menu (no inline tray any more).
+        // "+" expands the attachment strip without rebuilding messages.
         await tester.tap(find.byTooltip('Attach media or a file'));
         await tester.pump(const Duration(milliseconds: 400));
         expect(find.text('Photo or video'), findsOneWidget);

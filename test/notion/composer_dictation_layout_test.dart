@@ -21,6 +21,7 @@ void main() {
 
   Widget host({
     double scale = 1,
+    List<List<ComposerAction>>? attachments,
     TextDirection direction = TextDirection.ltr,
   }) => MaterialApp(
     theme: ThemeData.dark(),
@@ -43,11 +44,14 @@ void main() {
                     network: 'telegram',
                     onPressed: () {},
                   ),
-                  addAction: IconButton(
-                    tooltip: 'Attach',
-                    onPressed: () {},
-                    icon: const Icon(Icons.add),
-                  ),
+                  attachmentRows: attachments,
+                  addAction: attachments != null
+                      ? null
+                      : IconButton(
+                          tooltip: 'Attach',
+                          onPressed: () {},
+                          icon: const Icon(Icons.add),
+                        ),
                   fieldAction: ComposerAction(
                     icon: Icons.sentiment_satisfied_alt_outlined,
                     label: 'Emoji',
@@ -91,7 +95,7 @@ void main() {
 
   for (final direction in [TextDirection.ltr, TextDirection.rtl]) {
     testWidgets(
-      '320dp at 200% text reveals three 48dp recording actions above the row ($direction)',
+      '320dp at 200% text reveals three equal recording actions above the row ($direction)',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(320, 700));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -111,7 +115,8 @@ void main() {
         // The controls open above the editor without resizing it.
         expect(tester.getSize(find.byType(TextField)).width, folded);
         for (final button in [dictate, round, mic]) {
-          expect(tester.getSize(button), const Size.square(48));
+          expect(tester.getSize(button).height, 48);
+          expect(tester.getSize(button).width, closeTo((320 - 16) / 3, 0.01));
           expect(
             tester.getCenter(button).dy,
             lessThan(tester.getTopLeft(find.byType(TextField)).dy),
@@ -130,6 +135,49 @@ void main() {
       },
     );
   }
+
+  testWidgets(
+    'attachment strip has four equal cells and replaces recording choices',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(320, 700));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final picked = <String>[];
+      const labels = [
+        'Photo or video',
+        'Send file',
+        'Take a photo',
+        'Record a video',
+      ];
+      await tester.pumpWidget(
+        host(
+          scale: 2,
+          attachments: [
+            [
+              for (final label in labels)
+                ComposerAction(
+                  icon: Icons.attach_file,
+                  label: label,
+                  onPressed: () => picked.add(label),
+                ),
+            ],
+          ],
+        ),
+      );
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Attach media or a file'));
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Dictate a message'), findsNothing);
+      for (final label in labels) {
+        expect(tester.getSize(find.text(label)).width, 76);
+      }
+      await tester.tap(find.text(labels.last));
+      await tester.pumpAndSettle();
+      expect(picked, [labels.last]);
+      expect(find.text(labels.last), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'typing puts send in the recording picker\'s place, same editor',
@@ -169,11 +217,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(toggle, findsNothing);
     final editorState = tester.state(find.byType(EditableText));
-    final micState = tester.state(find.byType(VoiceRecordButton));
+    final micState = tester.state(
+      find.byType(VoiceRecordButton, skipOffstage: false),
+    );
     await tester.binding.setSurfaceSize(const Size(320, 700));
     await tester.pumpAndSettle();
     expect(tester.state(find.byType(EditableText)), same(editorState));
-    expect(tester.state(find.byType(VoiceRecordButton)), same(micState));
+    expect(
+      tester.state(find.byType(VoiceRecordButton, skipOffstage: false)),
+      same(micState),
+    );
     expect(toggle, findsOneWidget);
     expect(tester.getSize(find.byType(TextField)).width, greaterThan(80));
     expect(tester.takeException(), isNull);

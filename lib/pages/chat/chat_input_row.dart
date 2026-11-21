@@ -91,10 +91,6 @@ class ChatInputRow extends StatefulWidget {
   static const double height = 56.0;
   const ChatInputRow(this.controller, {super.key});
 
-  /// Forces the phone attachment sheet (true) or the desktop menu (false).
-  @visibleForTesting
-  static bool? debugAttachSheet;
-
   @override
   State<ChatInputRow> createState() => _ChatInputRowState();
 }
@@ -125,144 +121,73 @@ class _ChatInputRowState extends State<ChatInputRow> {
     if (holding != _holding && mounted) setState(() => _holding = holding);
   }
 
-  /// "+" opens the attach menu directly (Telegram's paperclip, Messenger's
-  /// "+"): one tap to the combined system photo and video picker. Library
-  /// media first, then capture, then structured content; the rare silent
-  /// round and the account switch stay last.
-  Future<void> _openAttachMenu(BuildContext anchor) async {
+  List<List<ComposerAction>> _attachmentRows() {
+    if (controller.editEvent != null) return const [];
     final l10n = L10n.of(context);
     final matrix = Matrix.of(context);
-    void pick(AddPopupMenuActions choice) =>
-        controller.onAddPopupMenuButtonSelected(choice);
     final offers = composerAttachOffers(controller.room);
-    final listed = <ComposerMenuEntry<VoidCallback>>[
-      if (offers.media)
-        ComposerMenuEntry(
-          () => pick(AddPopupMenuActions.gallery),
-          Icons.photo_library_outlined,
-          'Photo or video',
-        ),
-      if (offers.file)
-        ComposerMenuEntry(
-          () => pick(AddPopupMenuActions.file),
-          Icons.attachment_outlined,
-          l10n.sendFile,
-        ),
-      if (PlatformInfos.isMobile && (offers.photo || offers.video)) ...[
-        const ComposerMenuEntry.divider(),
-        if (offers.photo)
-          ComposerMenuEntry(
-            () => pick(AddPopupMenuActions.photoCamera),
+    ComposerAction action(
+      AddPopupMenuActions choice,
+      IconData icon,
+      String label,
+    ) => ComposerAction(
+      icon: icon,
+      label: label,
+      onPressed: () => controller.onAddPopupMenuButtonSelected(choice),
+    );
+    return [
+      [
+        if (offers.media)
+          action(
+            AddPopupMenuActions.gallery,
+            Icons.photo_library_outlined,
+            'Photo or video',
+          ),
+        if (offers.file)
+          action(
+            AddPopupMenuActions.file,
+            Icons.attachment_outlined,
+            l10n.sendFile,
+          ),
+        if (PlatformInfos.isMobile && offers.photo)
+          action(
+            AddPopupMenuActions.photoCamera,
             Icons.camera_alt_outlined,
             l10n.takeAPhoto,
           ),
-        if (offers.video)
-          ComposerMenuEntry(
-            () => pick(AddPopupMenuActions.videoCamera),
+        if (PlatformInfos.isMobile && offers.video)
+          action(
+            AddPopupMenuActions.videoCamera,
             Icons.videocam_outlined,
             l10n.recordAVideo,
           ),
       ],
-      if ((PlatformInfos.isMobile && offers.location) || offers.poll)
-        const ComposerMenuEntry.divider(),
-      if (PlatformInfos.isMobile && offers.location)
-        ComposerMenuEntry(
-          () => pick(AddPopupMenuActions.location),
-          Icons.gps_fixed_outlined,
-          l10n.shareLocation,
-        ),
-      if (offers.poll)
-        ComposerMenuEntry(
-          () => pick(AddPopupMenuActions.poll),
-          Icons.poll_outlined,
-          l10n.startPoll,
-        ),
-      if (controller.canRecordRoundSilently) ...[
-        const ComposerMenuEntry.divider(),
-        ComposerMenuEntry(
-          () => pick(AddPopupMenuActions.roundVideoSilent),
-          Icons.notifications_off_outlined,
-          'Record a round video silently',
-        ),
-      ],
-      if (controller.allowsAccountSwitch &&
-          matrix.isMultiAccount &&
-          matrix.hasComplexBundles &&
-          matrix.currentBundle!.length > 1) ...[
-        const ComposerMenuEntry.divider(),
-        ComposerMenuEntry(
-          _pickAccount,
-          Icons.switch_account_outlined,
-          'Send from another account',
-        ),
+      [
+        if (PlatformInfos.isMobile && offers.location)
+          action(
+            AddPopupMenuActions.location,
+            Icons.gps_fixed_outlined,
+            l10n.shareLocation,
+          ),
+        if (offers.poll)
+          action(AddPopupMenuActions.poll, Icons.poll_outlined, l10n.startPoll),
+        if (controller.canRecordRoundSilently)
+          action(
+            AddPopupMenuActions.roundVideoSilent,
+            Icons.notifications_off_outlined,
+            'Record a round video silently',
+          ),
+        if (controller.allowsAccountSwitch &&
+            matrix.isMultiAccount &&
+            matrix.hasComplexBundles &&
+            matrix.currentBundle!.length > 1)
+          ComposerAction(
+            icon: Icons.switch_account_outlined,
+            label: 'Send from another account',
+            onPressed: _pickAccount,
+          ),
       ],
     ];
-    // No divider at an edge or after another (hidden entries).
-    final entries = <ComposerMenuEntry<VoidCallback>>[];
-    for (final entry in listed) {
-      if (entry.isDivider && (entries.isEmpty || entries.last.isDivider)) {
-        continue;
-      }
-      entries.add(entry);
-    }
-    if (entries.isNotEmpty && entries.last.isDivider) entries.removeLast();
-    if (entries.isEmpty) return;
-    final run = _attachSheet
-        ? await _showAttachSheet(entries)
-        : await showComposerMenu<VoidCallback>(
-            anchor,
-            semanticLabel: 'Attach',
-            entries: entries,
-          );
-    if (!mounted || run == null) return;
-    run();
-  }
-
-  /// Phones pick attachments from a sheet at the bottom of the screen.
-  ///
-  /// An anchored menu was positioned from the "+" button's rect at the
-  /// moment of the tap. With the keyboard open, the menu route takes focus,
-  /// the keyboard closes and the composer drops by the keyboard height, but
-  /// the menu stays at the old position high above it. A bottom sheet does
-  /// not depend on the button or the keyboard insets.
-  bool get _attachSheet =>
-      ChatInputRow.debugAttachSheet ?? PlatformInfos.isMobile;
-
-  Future<VoidCallback?> _showAttachSheet(
-    List<ComposerMenuEntry<VoidCallback>> entries,
-  ) => showNotionSheet<VoidCallback>(
-    // Above the whole app, like the menu.
-    context: Navigator.of(context, rootNavigator: true).context,
-    title: 'Attach',
-    builder: (sheetContext) => SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final entry in entries)
-            if (entry.isDivider)
-              const NotionGlassDivider(vertical: false)
-            else
-              NotionGlassMenuRow(
-                leading: Icon(entry.icon, size: NotionSize.icon),
-                title: entry.label!,
-                onTap: () => Navigator.of(sheetContext).pop(entry.value),
-              ),
-        ],
-      ),
-    ),
-  );
-
-  /// The composer's "+": the attach menu, unavailable while editing.
-  Widget _attachButton() {
-    final enabled = controller.composerEnabled && controller.editEvent == null;
-    return Builder(
-      builder: (anchor) => IconButton(
-        tooltip: 'Attach media or a file',
-        icon: const Icon(Icons.add),
-        onPressed: enabled ? () => _openAttachMenu(anchor) : null,
-      ),
-    );
   }
 
   /// Long press on Send (Telegram's `onSendLongClick`): Send later or Remind
@@ -590,15 +515,16 @@ class _ChatInputRowState extends State<ChatInputRow> {
                           (emojis, category) => emojis..addAll(category.emoji),
                         ),
                   ),
-                  addAction: _attachButton(),
+                  attachmentRows: _attachmentRows(),
                   fieldAction: _emojiAction,
-                  actionsEnabled: controller.composerEnabled,
+                  actionsEnabled: controller.composerEnabled && !_holding,
                   collapseOnText: controller.sendController,
                   collapseToken: Object.hash(
                     controller.room.id,
                     controller.sendingClient.userID,
                     controller.replyEvent?.eventId,
                     controller.editEvent?.eventId,
+                    controller.showEmojiPicker,
                   ),
                   inputOverlay: _hold.capturing
                       // Recording samples tick only the overlay's clock.

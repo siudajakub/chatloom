@@ -129,7 +129,6 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
   bool _externalStarted = false;
   bool _externalFinishing = false;
   bool _externalDetached = false;
-  RoundCaptureState? _lastState;
   double? _zoomDraft;
   int? _zoomDraftRevision;
   double? _pinchStartZoom;
@@ -161,20 +160,12 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
       backend: createRoundCaptureBackend(widget.mediaAccess),
       profile: widget.profile,
     )..addListener(_changed);
-    _lastState = _controller.state;
     unawaited(_controller.initialize());
     _externalGestureChanged();
   }
 
   void _changed() {
     if (!mounted || _closing) return;
-    final state = _controller.state;
-    if (state == RoundCaptureState.recording &&
-        _lastState != RoundCaptureState.recording) {
-      // Telegram ticks when the camera actually records, and on resume.
-      NotionHaptics.longPress();
-    }
-    _lastState = state;
     _externalGestureChanged();
     if (_controller.state == RoundCaptureState.review &&
         _controller.prepared != _playerMedia) {
@@ -561,23 +552,20 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
     final media = MediaQuery.of(context);
     final screen = media.size;
     final route = ModalRoute.of(context)?.animation;
-    final anchor = widget.gesture?.anchor;
     final rtl = Directionality.of(context) == TextDirection.rtl;
-    // The record circle sits where the composer button (and the finger) is.
-    final action = Offset(
-      anchor?.center.dx ??
-          (rtl
-              ? NotionSpace.xs + NotionSize.touchTarget / 2
-              : screen.width - NotionSpace.xs - NotionSize.touchTarget / 2),
-      anchor?.center.dy ??
-          screen.height -
-              media.padding.bottom -
-              RoundRecorderLayout.panelHeight / 2,
+    final panelTop =
+        screen.height - media.padding.bottom - RoundRecorderLayout.panelHeight;
+    final panelAction = Offset(
+      rtl
+          ? NotionSpace.xs + NotionSize.touchTarget / 2
+          : screen.width - NotionSpace.xs - NotionSize.touchTarget / 2,
+      panelTop + RoundRecorderLayout.panelHeight / 2,
     );
-    final panelTop = math.min(
-      action.dy - RoundRecorderLayout.panelHeight / 2,
-      screen.height - media.padding.bottom - RoundRecorderLayout.panelHeight,
-    );
+    // Only the held control tracks the composer. The camera and bottom
+    // controls use the recorder's own layout, including with a keyboard open.
+    final action = _holding
+        ? widget.gesture?.anchor?.center ?? panelAction
+        : panelAction;
     final flashOn =
         _screenFlash &&
         _controller.frontCamera &&
@@ -612,12 +600,28 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
           child: Column(
             children: [
               Expanded(
-                child: Center(
-                  child: _openTransform(
-                    context,
-                    route,
-                    _circle(context, screen),
-                  ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    const rim =
+                        RoundRecorderLayout.ringGap +
+                        RoundRecorderLayout.ringWidth;
+                    final available = math.min(
+                      constraints.maxWidth,
+                      constraints.maxHeight,
+                    );
+                    final size = math.min(
+                      RoundRecorderLayout.circleSize(screen),
+                      available - 2 * rim,
+                    );
+                    if (size <= 0) return const SizedBox.shrink();
+                    return Center(
+                      child: _openTransform(
+                        context,
+                        route,
+                        _circle(context, size),
+                      ),
+                    );
+                  },
                 ),
               ),
               _fade(context, route, _cameraControls(context)),
@@ -678,12 +682,11 @@ class _RoundVideoRecorderState extends State<RoundVideoRecorder>
   }
 
   /// The camera circle with Telegram's white progress ring around it.
-  Widget _circle(BuildContext context, Size screen) {
+  Widget _circle(BuildContext context, double size) {
     final state = _controller.state;
     final review = state == RoundCaptureState.review;
     final preview = _controller.preview;
     final player = _player;
-    final size = RoundRecorderLayout.circleSize(screen);
     final controller = _controller;
     double progress() => review
         ? 0.0

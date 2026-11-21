@@ -112,13 +112,7 @@ class _RoundRecordButtonState extends State<RoundRecordButton> {
     }
     final delta = event.position - _origin;
     final rtl = Directionality.of(context) == TextDirection.rtl;
-    final before = gesture.phase;
     gesture.move(dx: rtl ? -delta.dx : delta.dx, dy: delta.dy);
-    if (before == RoundCaptureGesturePhase.holding &&
-        gesture.phase == RoundCaptureGesturePhase.locked) {
-      // Telegram ticks when the recording locks.
-      NotionHaptics.longPress();
-    }
   }
 
   void _up(PointerUpEvent event) {

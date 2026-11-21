@@ -188,8 +188,7 @@ class VoiceRecordButton extends StatefulWidget {
   /// Discards the recording without sending anything.
   final VoidCallback onCancel;
 
-  /// The recorder's own clock; defaults to the hold clock. Start, send and
-  /// cancel feedback belongs to the recorder, only locking clicks here.
+  /// The recorder's own clock; defaults to the hold clock.
   final Duration Function()? recorded;
   final bool enabled;
 
@@ -353,7 +352,6 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
       }
     } else if (-delta.dy >= VoiceRecordHold.lockDistance && _hold.canLock) {
       _pointer = null;
-      NotionHaptics.longPress();
       _hold.lock();
     }
   }
@@ -516,35 +514,39 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onPanStart: widget.enabled ? _claim : null,
-            child: CompositedTransformTarget(
-              link: _link,
-              child: OverlayPortal(
-                controller: _portal,
-                overlayChildBuilder: _heldOverlay,
-                child: ListenableBuilder(
-                  listenable: _hold,
-                  builder: (context, _) {
-                    // While held the overlay draws the enlarged fill on top.
-                    final active = _hold.capturing;
-                    return SizedBox.square(
-                      dimension: NotionSize.touchTarget,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: active ? colors.onSurface : Colors.transparent,
+            child: Center(
+              child: CompositedTransformTarget(
+                link: _link,
+                child: OverlayPortal(
+                  controller: _portal,
+                  overlayChildBuilder: _heldOverlay,
+                  child: ListenableBuilder(
+                    listenable: _hold,
+                    builder: (context, _) {
+                      // While held the overlay draws the enlarged fill on top.
+                      final active = _hold.capturing;
+                      return SizedBox.square(
+                        dimension: NotionSize.touchTarget,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: active
+                                ? colors.onSurface
+                                : Colors.transparent,
+                          ),
+                          child: Icon(
+                            Icons.mic_none_outlined,
+                            size: NotionSize.iconLg,
+                            color: !widget.enabled
+                                ? Theme.of(context).disabledColor
+                                : active
+                                ? colors.surface
+                                : colors.onSurface,
+                          ),
                         ),
-                        child: Icon(
-                          Icons.mic_none_outlined,
-                          size: NotionSize.iconLg,
-                          color: !widget.enabled
-                              ? Theme.of(context).disabledColor
-                              : active
-                              ? colors.surface
-                              : colors.onSurface,
-                        ),
-                      ),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ),

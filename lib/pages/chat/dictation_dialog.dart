@@ -441,6 +441,9 @@ class _DictationDialogState extends State<DictationDialog>
               DictationPhase.error => _transcribe,
               _ => _send,
             },
+            onPause: recorder.isRecording && !recorder.controlsBusy
+                ? recorder.pause
+                : null,
             onResume: recorder.canResume ? _resume : null,
           );
         },
@@ -461,6 +464,7 @@ class DictationPanel extends StatelessWidget {
     this.duration = Duration.zero,
     this.paused = false,
     this.error,
+    this.onPause,
     this.onResume,
   });
 
@@ -471,6 +475,7 @@ class DictationPanel extends StatelessWidget {
   final Duration duration;
   final bool paused;
   final String? error;
+  final VoidCallback? onPause;
   final VoidCallback? onResume;
 
   @override
@@ -568,7 +573,7 @@ class DictationPanel extends StatelessWidget {
               if (phase == DictationPhase.recording) ...[
                 Text(
                   notionAudioTime(duration),
-                  style: tokens.typography.title.copyWith(
+                  style: tokens.typography.body.copyWith(
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
@@ -580,13 +585,13 @@ class DictationPanel extends StatelessWidget {
                   child: Text(status, style: tokens.typography.calloutMuted),
                 ),
               ),
-              if (paused &&
-                  onResume != null &&
-                  phase == DictationPhase.recording)
-                NotionButton.ghost(
-                  label: words('Wznów nagrywanie', 'Resume recording'),
-                  icon: Icons.mic_none_outlined,
-                  onPressed: onResume,
+              if (phase == DictationPhase.recording)
+                NotionIconButton(
+                  label: paused
+                      ? words('Wznów nagrywanie', 'Resume recording')
+                      : words('Wstrzymaj nagrywanie', 'Pause recording'),
+                  icon: paused ? Icons.mic_none_outlined : Icons.pause,
+                  onPressed: paused ? onResume : onPause,
                 ),
             ],
           ),

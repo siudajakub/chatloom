@@ -226,7 +226,8 @@ void main() {
         await tester.pumpAndSettle();
         final dictation = find.byKey(const ValueKey('composer-dictation'));
         expect(dictation, findsOneWidget);
-        expect(tester.getSize(dictation), const Size.square(48));
+        expect(tester.getSize(dictation).height, 48);
+        expect(tester.getSize(dictation).width, greaterThanOrEqualTo(48));
         await tester.tap(dictation);
         await tester.pumpAndSettle();
         expect(find.text('Dictation unavailable'), findsOneWidget);
