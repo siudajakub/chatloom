@@ -515,6 +515,8 @@ class _VoiceRecordButtonState extends State<VoiceRecordButton> {
             behavior: HitTestBehavior.opaque,
             onPanStart: widget.enabled ? _claim : null,
             child: Center(
+              widthFactor: 1,
+              heightFactor: 1,
               child: CompositedTransformTarget(
                 link: _link,
                 child: OverlayPortal(

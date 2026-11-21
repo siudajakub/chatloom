@@ -334,10 +334,19 @@ class _CompactComposerState extends State<CompactComposer>
   }
 
   @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: {
-      if (_expanded || _recordOpen)
-        const SingleActivator(LogicalKeyboardKey.escape): _closeStrips,
+  Widget build(BuildContext context) => Focus(
+    canRequestFocus: false,
+    skipTraversal: true,
+    includeSemantics: false,
+    onKeyEvent: (_, event) {
+      if ((_expanded || _recordOpen) &&
+          const SingleActivator(
+            LogicalKeyboardKey.escape,
+          ).accepts(event, HardwareKeyboard.instance)) {
+        _closeStrips();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
     },
     child: TapRegion(
       onTapOutside: widget.inputOverlay == null ? (_) => _closeStrips() : null,
@@ -471,8 +480,8 @@ class _CompactComposerState extends State<CompactComposer>
                     Expanded(
                       child: _ComposerStripChoice(
                         label: _polish ? 'Głos' : 'Voice',
-                        child: _stripPrimary(),
                         excludeLabel: true,
+                        child: _stripPrimary(),
                       ),
                     ),
                   ],
@@ -610,8 +619,8 @@ class _CompactComposerState extends State<CompactComposer>
       maintainSize: true,
       child: _ComposerStripChoice(
         label: label,
-        child: action,
         excludeLabel: true,
+        child: action,
       ),
     ),
   );
@@ -664,7 +673,10 @@ class _CompactComposerState extends State<CompactComposer>
 
   Widget _primarySwitcher(Widget action) => KeyedSubtree(
     key: _primaryKey,
-    child: NotionMorphSwitcher(bounce: true, child: action),
+    child: NotionMorphSwitcher(
+      bounce: true,
+      child: SizedBox(width: double.infinity, key: action.key, child: action),
+    ),
   );
 }
 
