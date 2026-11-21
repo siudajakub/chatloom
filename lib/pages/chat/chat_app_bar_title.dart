@@ -49,11 +49,19 @@ class ChatAppBarTitle extends StatelessWidget {
           ),
         ),
         name: name,
-        status: ConversationActivityStatus(
-          client: room.client,
-          rooms: [room],
-          activity: activity,
-          fallback: ChatHeaderSubtitle.infoLabel(context, room),
+        status: StreamBuilder(
+          stream: room.client.onRoomState.stream.where(
+            (u) =>
+                u.roomId == room.id &&
+                (u.state.type == EventTypes.RoomMember ||
+                    bridgeInfoStateTypes.contains(u.state.type)),
+          ),
+          builder: (context, _) => ConversationActivityStatus(
+            client: room.client,
+            rooms: [room],
+            activity: activity,
+            fallback: ChatHeaderSubtitle.infoLabel(context, room),
+          ),
         ),
         onDetails: () => ChatLoomThemes.isThreeColumnMode(context)
             ? controller.toggleDisplayChatDetailsColumn()
@@ -118,8 +126,7 @@ class ChatHeaderSubtitle extends StatelessWidget {
       final network = notionNetworkLabel(PersonalClient.networkOf(room));
       return network == 'Other' ? null : network;
     }
-    final members =
-        room.summary.mJoinedMemberCount ?? room.getParticipants().length;
+    final members = humanParticipantCount(room);
     if (members <= 0) return null;
     return L10n.of(context).countParticipants(members);
   }

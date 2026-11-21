@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:math' as math;
+
 import 'package:matrix/matrix.dart';
 
 /// Bridge info state of a portal room: mautrix bridgev2 sends `m.bridge` and
@@ -10,6 +12,39 @@ const bridgeInfoStateTypes = [
   'uk.half-shot.bridge',
   'com.beeper.bridge',
 ];
+
+Set<String> declaredBridgeBots(Room room) => {
+  for (final type in bridgeInfoStateTypes)
+    for (final state
+        in room.states[type]?.values ?? const <StrippedStateEvent>[])
+      if (state.content['bridgebot'] case final String bot when bot.isNotEmpty)
+        bot,
+};
+
+bool isBridgeBotMember(Room room, String userId, {Set<String>? declared}) =>
+    (declared ?? declaredBridgeBots(room)).contains(userId) ||
+    room
+            .getState(EventTypes.RoomMember, userId)
+            ?.content['com.beeper.bridge.is_bridge_bot'] ==
+        true;
+
+/// Keep the server's totals with lazy members, subtracting only bots with
+/// known membership. A fully loaded list can also count rooms without totals.
+int humanParticipantCount(Room room, {bool includeInvited = false}) {
+  final bots = declaredBridgeBots(room);
+  int count(Membership membership, int? total) {
+    final members = room.getParticipants([membership]);
+    final botCount = members
+        .where((member) => isBridgeBotMember(room, member.id, declared: bots))
+        .length;
+    return math.max(0, (total ?? members.length) - botCount);
+  }
+
+  return count(Membership.join, room.summary.mJoinedMemberCount) +
+      (includeInvited
+          ? count(Membership.invite, room.summary.mInvitedMemberCount)
+          : 0);
+}
 
 /// Whether [room] is a bridge portal (a Telegram, WhatsApp, … chat seen
 /// through Matrix). Its other members are the bridge bot and puppets of the

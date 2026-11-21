@@ -36,6 +36,7 @@ import 'package:chatloom/pages/chat/trust_user_key_dialog.dart';
 import 'package:chatloom/pages/chat/utils/web_file_to_x_file.dart';
 import 'package:chatloom/pages/chat/voice_message_sender.dart';
 import 'package:chatloom/pages/chat_details/chat_details.dart';
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/composer_commands.dart';
 import 'package:chatloom/personal/copy_notice.dart';
@@ -802,6 +803,27 @@ class ChatController extends State<ChatPageWithRoom>
       // The first send must not wait for the member list (trust check);
       // loaded once the opening slide has finished.
       warmUpSendPath(room, route: ModalRoute.of(context)?.animation);
+      final openedRoom = room;
+      final joined = openedRoom.summary.mJoinedMemberCount ?? 0;
+      if (!openedRoom.isDirectChatForDisplay &&
+          !openedRoom.participantListComplete &&
+          (!openedRoom.encrypted || joined > 100)) {
+        // Large and unencrypted rooms do not warm the full member list.
+        // Resolve only declared bots omitted by lazy loading.
+        NotionMotion.afterRouteSettled(context, () {
+          if (!mounted || !identical(openedRoom, room)) return;
+          for (final bot in declaredBridgeBots(openedRoom)) {
+            if (bot.isValidMatrixIdStrict() &&
+                openedRoom.getState(EventTypes.RoomMember, bot) == null) {
+              unawaited(
+                openedRoom
+                    .requestUser(bot, requestProfile: false, ignoreErrors: true)
+                    .then<void>((_) {}, onError: (Object _) {}),
+              );
+            }
+          }
+        });
+      }
     });
     web.window.addEventListener('paste', _handleClipboardFilePasteWeb);
 

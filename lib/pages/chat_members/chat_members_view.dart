@@ -4,8 +4,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/capabilities.dart';
-import 'package:chatloom/personal/ui/contact_sheet.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/utils/localized_exception_extension.dart';
 import 'package:go_router/go_router.dart';
@@ -41,16 +41,22 @@ class ChatMembersView extends StatelessWidget {
       );
     }
 
-    final members = controller.filteredMembers
-        ?.where((member) => !isBridgeBotMember(room, member.id))
-        .toList();
-    final everyone = controller.members
-        ?.where((member) => !isBridgeBotMember(room, member.id))
-        .toList();
+    final bots = declaredBridgeBots(room);
+    bool isPerson(User member) =>
+        !isBridgeBotMember(room, member.id, declared: bots) &&
+        member.content['com.beeper.bridge.is_bridge_bot'] != true;
+    final members = controller.filteredMembers?.where(isPerson).toList();
+    final everyone = controller.members?.where(isPerson).toList();
 
     final roomCount =
-        (room.summary.mJoinedMemberCount ?? 0) +
-        (room.summary.mInvitedMemberCount ?? 0);
+        everyone
+            ?.where(
+              (member) =>
+                  member.membership == Membership.join ||
+                  member.membership == Membership.invite,
+            )
+            .length ??
+        humanParticipantCount(room, includeInvited: true);
 
     final error = controller.error;
 
@@ -102,7 +108,6 @@ class ChatMembersView extends StatelessWidget {
                       rise: NotionMotion.riseList,
                       child: _Filters(
                         controller: controller,
-                        room: room,
                         members: everyone ?? const [],
                       ),
                     );
@@ -123,13 +128,8 @@ class ChatMembersView extends StatelessWidget {
 
 class _Filters extends StatelessWidget {
   final ChatMembersController controller;
-  final Room room;
   final List<User> members;
-  const _Filters({
-    required this.controller,
-    required this.room,
-    required this.members,
-  });
+  const _Filters({required this.controller, required this.members});
 
   @override
   Widget build(BuildContext context) {
@@ -143,9 +143,7 @@ class _Filters extends StatelessWidget {
         members.where((member) => member.membership == value).length;
     String label(Membership value) => switch (value) {
       Membership.ban => l10n.banned,
-      Membership.invite => l10n.countInvited(
-        room.summary.mInvitedMemberCount ?? count(Membership.invite),
-      ),
+      Membership.invite => l10n.countInvited(count(Membership.invite)),
       Membership.join => l10n.countParticipants(count(Membership.join)),
       Membership.knock => l10n.knocking,
       Membership.leave => l10n.leftTheChat,

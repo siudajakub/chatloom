@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'package:chatloom/personal/bridged_room.dart';
 import 'package:chatloom/personal/matrix_error_text.dart';
 import 'package:matrix/matrix.dart';
 
@@ -7,13 +8,6 @@ import 'package:matrix/matrix.dart';
 /// references the original with `m.reference` and says whether the remote
 /// network accepted it.
 const beeperMessageSendStatusType = 'com.beeper.message_send_status';
-
-/// The bridge state events that name the room's bridge bot.
-const _bridgeStateTypes = [
-  'm.bridge',
-  'uk.half-shot.bridge',
-  'com.beeper.bridge',
-];
 
 /// One `com.beeper.message_send_status` report, already checked to come
 /// from the room's bridge bot.
@@ -203,13 +197,7 @@ String bridgeFailureText(BridgeSendStatus status, {String? network}) =>
     );
 
 /// The declared bridge bots of [room] (`bridgebot` of its bridge state).
-Set<String> bridgeBotsOf(Room room) => {
-  for (final type in _bridgeStateTypes)
-    for (final state
-        in room.states[type]?.values ?? const <StrippedStateEvent>[])
-      if (state.content['bridgebot'] case final String bot when bot.isNotEmpty)
-        bot,
-};
+Set<String> bridgeBotsOf(Room room) => declaredBridgeBots(room);
 
 /// Bridge reports about [event] in [timeline], trusted senders only.
 Iterable<BridgeSendStatus> bridgeStatusesOf(

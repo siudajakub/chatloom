@@ -6,7 +6,6 @@ import 'package:chatloom/personal/conversation_classification.dart';
 import 'package:chatloom/personal/copy_notice.dart';
 import 'package:chatloom/personal/developer_options.dart';
 import 'package:chatloom/personal/media/avatar_resolver.dart';
-import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/network_chat_actions.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/ui/network_action_flows.dart';
@@ -21,6 +20,8 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+
+export 'package:chatloom/personal/bridged_room.dart' show isBridgeBotMember;
 
 /// The contact card of a person seen through a bridge (FX-05; Telegram's and
 /// Messenger's profile): name, photo, network, the network's own phone
@@ -85,14 +86,6 @@ List<ContactIdentifier> contactIdentifiers(Room room, String userId) {
   }
   return result;
 }
-
-/// Whether [userId] is a bridge bot of [room] (never a contact).
-bool isBridgeBotMember(Room room, String userId) =>
-    bridgeBotsOf(room).contains(userId) ||
-    room
-            .getState(EventTypes.RoomMember, userId)
-            ?.content['com.beeper.bridge.is_bridge_bot'] ==
-        true;
 
 /// A joined bridged room that shows [userId] as a remote person, the DM
 /// portal first; null for native Matrix users and bridge bots.
