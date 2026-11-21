@@ -33,9 +33,12 @@ SummarySource source({bool complete = true}) => SummarySource(
     ),
   ],
 );
-http.Response answer({String finish = 'stop'}) => http.Response(
+http.Response answer({
+  String finish = 'stop',
+  String model = conversationSummaryModel,
+}) => http.Response(
   jsonEncode({
-    'model': conversationSummaryModel,
+    'model': model,
     'choices': [
       {
         'finish_reason': finish,
@@ -68,6 +71,7 @@ class FakeSummarizer implements ConversationSummarizer {
   @override
   String get model => conversationSummaryModel;
   int calls = 0;
+  SummaryQuestion? question;
   bool uncertain = false;
   Completer<void>? hold;
   @override
@@ -78,6 +82,7 @@ class FakeSummarizer implements ConversationSummarizer {
     void Function(double cost) onAttempt,
   ) async {
     calls++;
+    question = source.question;
     onAttempt(0.01);
     await hold?.future;
     cancel.check();
@@ -140,11 +145,11 @@ void main() {
         expect(body['provider'], containsPair('data_collection', 'deny'));
         expect(body['provider'], containsPair('zdr', true));
         expect((body['provider'] as Map)['max_price'], {
-          'prompt': 0.25,
-          'completion': 1.5,
+          'prompt': summaryInputUsdPerMillion,
+          'completion': summaryOutputUsdPerMillion,
         });
         expect(body['max_tokens'], 2500);
-        expect(body['reasoning'], containsPair('effort', 'none'));
+        expect(body['reasoning'], containsPair('enabled', false));
         final messages = body['messages'] as List;
         expect(
           (messages[0] as Map)['content'],
@@ -159,6 +164,41 @@ void main() {
         expect(result.endedAt, at.add(const Duration(minutes: 1)));
         expect(ceiling, lessThan(0.12));
         expect(result.toString(), isNot(contains(result.text)));
+      },
+    );
+
+    test(
+      'question uses grounded prompt and a smaller completion budget',
+      () async {
+        final original = source();
+        final asking = SummarySource(
+          messages: original.messages,
+          complete: true,
+          question: SummaryQuestion(
+            'When did they decide?',
+            previousQuestions: ['What was discussed?'],
+          ),
+        );
+        final summarizer = OpenRouterConversationSummarizer(
+          'synthetic-only',
+          clientFactory: () => MockClient((request) async {
+            final body = jsonDecode(request.body) as Map;
+            final messages = body['messages'] as List;
+            expect(messages.first['content'], contains('question.text'));
+            expect(messages.first['content'], isNot(contains('When did they')));
+            final sent = jsonDecode(messages.last['content'] as String) as Map;
+            expect(sent['question'], asking.question!.toJson());
+            expect(body['max_tokens'], 1000);
+            return answer();
+          }),
+        );
+        final result = await summarizer.summarize(
+          const SummaryRequest(),
+          asking,
+          Cancellation(),
+          (_) {},
+        );
+        expect(result.model, conversationSummaryModel);
       },
     );
 
@@ -237,13 +277,40 @@ void main() {
         summarySystemPrompt(
           const SummaryRequest(language: 'en', detail: SummaryDetail.detailed),
         ),
-        contains('Write the summary in English'),
+        contains('Write a summary in English'),
       );
       expect(
         summarySystemPrompt(const SummaryRequest(detail: SummaryDetail.brief)),
         contains('100–180 words'),
       );
     });
+
+    test(
+      'detailed summary uses Gemini standard capacity and price caps',
+      () async {
+        const model = 'google/gemini-3.1-flash-lite';
+        final summarizer = OpenRouterConversationSummarizer(
+          'synthetic-only',
+          clientFactory: () => MockClient((request) async {
+            final body = jsonDecode(request.body) as Map;
+            expect(body['model'], model);
+            expect(body['service_tier'], 'default');
+            expect(body['provider']['max_price'], {
+              'prompt': .25,
+              'completion': 1.50,
+            });
+            return answer(model: model);
+          }),
+        );
+        final result = await summarizer.summarize(
+          const SummaryRequest(detail: SummaryDetail.detailed),
+          source(),
+          Cancellation(),
+          (_) {},
+        );
+        expect(result.model, model);
+      },
+    );
   });
 
   group('durable worker summary jobs', () {
@@ -282,12 +349,13 @@ void main() {
       }
     }
 
-    SummaryUpload upload({bool complete = true}) => SummaryUpload.create(
-      id: 'summary:fixture05',
-      conversation: conversation,
-      request: const SummaryRequest(),
-      source: source(complete: complete),
-    );
+    SummaryUpload upload({bool complete = true, SummaryQuestion? question}) =>
+        SummaryUpload.create(
+          id: 'summary:fixture05',
+          conversation: conversation,
+          request: SummaryRequest(question: question),
+          source: source(complete: complete),
+        );
     setUp(() {
       sequence = 0;
       now = at;
@@ -341,6 +409,23 @@ void main() {
         expect(store.job(input.id)?['coverageNote'], contains('photo'));
       },
     );
+    test('question jobs erase the question and its source after use', () async {
+      final input = upload(question: SummaryQuestion('Who agreed to meet?'));
+      uploadParts(input);
+      engine.accept(operation('summary.question', input.id, input.manifest));
+      await engine.tick();
+      await engine.waitForIdle();
+      expect(summarizer.question?.text, 'Who agreed to meet?');
+      expect(store.job(input.id)?['state'], 'done');
+      expect(store.metadata(input.partEntity(0))?['deleted'], isTrue);
+      final records = store.db.select(
+        'SELECT body FROM commands UNION ALL SELECT body FROM outbox',
+      );
+      expect(
+        records.every((row) => !(row['body'] as String).contains('Who agreed')),
+        isTrue,
+      );
+    });
     test('digest mismatch is rejected before any provider request', () async {
       final input = upload();
       final changed = {...input.parts.first, 'text': 'tampered'};

@@ -91,6 +91,7 @@ class SummaryJobs {
     final count = input['partCount'];
     final bytes = input['sourceBytes'];
     final digest = input['sourceDigest'];
+    final asking = op.kind == 'summary.question';
     if (id is! String ||
         id != op.entityId ||
         !validSummaryId(id) ||
@@ -101,6 +102,8 @@ class SummaryJobs {
         bytes < 1 ||
         bytes > SummaryUpload.maxSourceBytes ||
         digest is! String ||
+        (input.containsKey('question') && input['question'] != true) ||
+        asking != (input['question'] == true) ||
         !RegExp(r'^[a-f0-9]{64}$').hasMatch(digest)) {
       throw const WorkerFailure('invalid_summary_request');
     }
@@ -120,6 +123,11 @@ class SummaryJobs {
         !conversation.roomId.startsWith('!')) {
       throw const WorkerFailure('invalid_account_or_room');
     }
+    if (asking &&
+        request.scope != SummaryScopeKind.all &&
+        request.scope != SummaryScopeKind.messages) {
+      throw const WorkerFailure('invalid_summary_request');
+    }
     final job = <String, dynamic>{
       'id': id,
       'kind': 'summary',
@@ -128,6 +136,7 @@ class SummaryJobs {
       'acceptedOpId': op.opId,
       'createdAt': clock().toUtc().toIso8601String(),
       'request': request.toJson(),
+      if (asking) 'question': true,
       'partCount': count,
       'sourceBytes': bytes,
       'sourceDigest': digest,
@@ -190,6 +199,9 @@ class SummaryJobs {
         source = SummarySource.fromJson(
           Map<String, dynamic>.from(jsonDecode(encoded) as Map),
         );
+        if ((job['question'] == true) != (source.question != null)) {
+          throw const SummaryException('invalid_question');
+        }
         // The client must make incomplete coverage explicit before upload.
         if (!source.complete && (source.coverageNote?.trim().isEmpty ?? true)) {
           throw const SummaryException('history_incomplete');

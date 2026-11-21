@@ -142,11 +142,12 @@ enabled implicitly for an old private configuration.
 * **Compatibility.** `timing` is optional: apps without support ignore it, apps with support estimate line times from the text and the media length when it is absent (labelled "Approximate timing"), and older workers never write it. A record that does not match the text (out of range, not covering it) is ignored. A new text without `timing` drops older timestamps in the apps' replica; a refusal (`conflict`) echoes neither text nor timestamps.
 * **Privacy.** Timestamps travel inside the same encrypted journal result as the text, are reused only with that text (byte-identical media), and are erased with it: a redacted source removes `timing` from the job, the tombstone and queued results.
 
-## Group conversation summaries
+## Conversation summaries and questions
 
-An explicitly selected group conversation can be summarised from the app's
-three-dot menu. The app selects the last N user messages, the last N hours or
-days, or the complete history available to its Matrix session. It resolves
+In the conversation menu, groups and merged chats support summaries, while
+individual chats also support questions. The app selects the latest messages
+or the complete history available to its Matrix session. Summaries also
+accept the last N hours or days. The app resolves
 edits/replies and uses existing transcripts; it does not download attachments,
 start transcriptions, mark the conversation as read, or send the summary to
 the group. A history pagination gap stops the request. Omitted media or other
@@ -156,28 +157,32 @@ The provider key stays in the worker. Summaries use the same `openrouter_api_key
 systemd credential (or private credentials JSON `openrouterApiKey`) as speech
 transcription, including when speech itself is configured for OpenAI. There is
 no key in the Flutter application and no additional service endpoint. A new
-worker heartbeat advertises `summary: ready|not_configured` and `summaryVersion: 1`;
-an older worker cannot silently accept an unsupported request. No automatic
-summary is generated.
+worker heartbeat advertises `summary: ready|not_configured` and
+`summaryVersion: 1`. Questions additionally require `summaryQuestions: 1`. A
+question and its preceding questions travel with the encrypted source parts.
+The job manifest carries only a question flag. Both tasks require an explicit
+request from the user.
 
 The app sends selected text and participant display names in authenticated,
 encrypted personal-journal metadata parts under a fresh `summary:` job ID.
-Each part holds at most 12,000 UTF-8 bytes. The `summary.request` manifest names
-the part count, total byte count and SHA-256 digest. The worker checks the own
+Each part holds at most 12,000 UTF-8 bytes. The `summary.request` and
+`summary.question` manifests name the part count, total byte count and SHA-256
+digest. Separate operation kinds keep questions out of older workers' summary
+path if a capability heartbeat outlives a rollback. The worker checks the own
 account, schema, chronological ordering, every part and the whole digest before
 making a provider request. Source input is capped at 400,000 UTF-8 bytes and
 10,000 included messages, with no silent truncation: choose a narrower range
 when the app reports that the selection is too large. The worker runs at most
 one summary at a time beside its existing transcription/sync work.
 
-The selected model is `google/gemini-3.1-flash-lite`: OpenRouter's public models
-API on 2026-11-03 listed a 1,048,576-token context and USD 0.25 per million input
-tokens / USD 1.50 per million output tokens. Requests require
-`provider: {data_collection: deny, zdr: true, require_parameters: true,
-max_price: {prompt: 0.25, completion: 1.5}}`, so routing refuses an endpoint
-without the requested privacy/parameter support or above the configured prices.
-Reasoning is disabled, temperature is 0.2, and brief/standard/detailed output is
-capped at 1,200/2,500/5,000 tokens. A conservative input-byte estimate plus the
+The default model is `nvidia/nemotron-3.5-lightning` at provider caps of
+$0.07 input and $0.20 output per million tokens. Detailed summaries and inputs
+over 240,000 UTF-8 bytes use `google/gemini-3.1-flash-lite` at $0.25 input
+and $1.50 output per million tokens. Requests require
+`data_collection: deny`, `zdr: true`, and `require_parameters: true`, with
+throughput sorting and per-model price caps. Reasoning is disabled, temperature
+is 0.2, and output is capped at 1,200/2,500/5,000 tokens for summaries and 1,000
+tokens for answers. A conservative input-byte estimate plus the
 full output allowance must stay below USD 0.12 per request. Reported provider
 cost is used when it is valid and within that estimate; otherwise the result
 keeps the estimate. See the [public model catalogue](https://openrouter.ai/api/v1/models)

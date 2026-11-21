@@ -64,6 +64,29 @@ void main() {
     );
   });
 
+  test('questions live in the digest-checked source outside the manifest', () {
+    final question = SummaryQuestion(
+      'When was the meeting?',
+      previousQuestions: ['Where did they meet?'],
+    );
+    final upload = SummaryUpload.create(
+      id: 'summary:fixtureqa',
+      conversation: conversation,
+      request: SummaryRequest(scope: SummaryScopeKind.all, question: question),
+      source: source('A fictional meeting'),
+    );
+    expect(upload.manifest['question'], true);
+    expect(jsonEncode(upload.manifest), isNot(contains(question.text)));
+    final payload = SummarySource.fromJson(
+      jsonDecode(upload.parts.map((part) => part['text']).join())
+          as Map<String, dynamic>,
+    );
+    expect(payload.question?.text, question.text);
+    expect(payload.question?.previousQuestions, question.previousQuestions);
+    expect(SummaryQuestion(' ').isValid, isFalse);
+    expect(SummaryQuestion('x' * 1001).isValid, isFalse);
+  });
+
   test(
     'invalid amounts, language, input order and empty source are rejected',
     () {
@@ -135,12 +158,13 @@ void main() {
       newOperationId: () => 'fixture-${sequence++}',
       clock: () => at,
     )..restore(records);
-    Future<PersonalOperation> stage() => replica.stageCommand(
-      'summary.request',
-      'summary:fixture04',
-      {'id': 'summary:fixture04'},
-      optimisticJob: {'id': 'summary:fixture04', 'state': 'waitingSync'},
-    );
+    Future<PersonalOperation> stage({String kind = 'summary.request'}) =>
+        replica.stageCommand(
+          kind,
+          'summary:fixture04',
+          {'id': 'summary:fixture04'},
+          optimisticJob: {'id': 'summary:fixture04', 'state': 'waitingSync'},
+        );
     PersonalOperation ack(
       PersonalOperation op,
       String state,
@@ -165,10 +189,9 @@ void main() {
       replica = restore();
     });
 
-    test(
-      'unpublished request is withdrawn without later reconnect spend',
-      () async {
-        await stage();
+    for (final kind in ['summary.request', 'summary.question']) {
+      test('unpublished $kind is withdrawn before reconnect spend', () async {
+        await stage(kind: kind);
         expect(
           await replica.cancelSummary('summary:fixture04'),
           TranscriptCancellation.cancelledLocally,
@@ -176,8 +199,8 @@ void main() {
         final restarted = restore();
         expect(restarted.pending, isEmpty);
         expect(restarted.summaries['summary:fixture04']?['state'], 'cancelled');
-      },
-    );
+      });
+    }
 
     test(
       'published request cancellation survives restart and waits for ACK',
@@ -199,6 +222,14 @@ void main() {
         expect(restore().pending, isEmpty);
       },
     );
+
+    test('late progress cannot displace an acknowledged summary result', () async {
+      final request = await stage();
+      await replica.acceptResult(ack(request, 'done', 1));
+      await replica.acceptResult(ack(request, 'queued', 1));
+      await replica.acceptResult(ack(request, 'processing', 1));
+      expect(restore().summaries[request.entityId]?['state'], 'done');
+    });
 
     test(
       'refused cancellation ends instead of generating endless commands',

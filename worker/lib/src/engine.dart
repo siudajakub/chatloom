@@ -254,6 +254,7 @@ class WorkerEngine {
       'transcript.request',
       'transcript.cancel',
       'summary.request',
+      'summary.question',
       'summary.cancel',
       'schedule.create',
       'schedule.update',

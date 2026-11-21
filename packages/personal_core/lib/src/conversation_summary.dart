@@ -44,15 +44,23 @@ class SummaryRequest {
   final int amount;
   final SummaryDetail detail;
   final String language;
+
+  /// The app adds the question to the encrypted source, outside the manifest.
+  final SummaryQuestion? question;
   const SummaryRequest({
     this.scope = SummaryScopeKind.messages,
     this.amount = 100,
     this.detail = SummaryDetail.standard,
     this.language = 'pl',
+    this.question,
   });
 
   bool get isValid =>
       (language == 'pl' || language == 'en') &&
+      (question == null ||
+          (question!.isValid &&
+              (scope == SummaryScopeKind.messages ||
+                  scope == SummaryScopeKind.all))) &&
       (scope == SummaryScopeKind.all ||
           (amount >= 1 &&
               amount <=
@@ -89,6 +97,43 @@ class SummaryRequest {
   String toString() => 'SummaryRequest(${scope.name}, ${detail.name})';
 }
 
+class SummaryQuestion {
+  static const maxLength = 1000;
+  static const maxPrevious = 4;
+
+  final String text;
+  final List<String> previousQuestions;
+
+  SummaryQuestion(this.text, {Iterable<String> previousQuestions = const []})
+    : previousQuestions = List.unmodifiable(previousQuestions);
+
+  bool get isValid =>
+      _validText(text) &&
+      previousQuestions.length <= maxPrevious &&
+      previousQuestions.every(_validText);
+
+  static bool _validText(String text) =>
+      text.trim().isNotEmpty && text.length <= maxLength;
+
+  Map<String, dynamic> toJson() => {
+    'text': text,
+    if (previousQuestions.isNotEmpty) 'previousQuestions': previousQuestions,
+  };
+
+  factory SummaryQuestion.fromJson(Map<String, dynamic> json) {
+    final question = SummaryQuestion(
+      json['text'] as String,
+      previousQuestions: (json['previousQuestions'] as List? ?? const [])
+          .cast<String>(),
+    );
+    if (!question.isValid) throw const SummaryException('invalid_question');
+    return question;
+  }
+
+  @override
+  String toString() => 'SummaryQuestion(redacted)';
+}
+
 class SummaryMessage {
   final DateTime timestamp;
   final String sender;
@@ -117,17 +162,20 @@ class SummarySource {
   final bool complete;
   final int omittedMessages;
   final String? coverageNote;
+  final SummaryQuestion? question;
   SummarySource({
     required List<SummaryMessage> messages,
     required this.complete,
     this.omittedMessages = 0,
     this.coverageNote,
+    this.question,
   }) : messages = List.unmodifiable(messages);
   Map<String, dynamic> toJson() => {
     'messages': messages.map((m) => m.toJson()).toList(),
     'complete': complete,
     'omittedMessages': omittedMessages,
     if (coverageNote != null) 'coverageNote': coverageNote,
+    if (question != null) 'question': question!.toJson(),
   };
   factory SummarySource.fromJson(Map<String, dynamic> json) {
     try {
@@ -156,6 +204,11 @@ class SummarySource {
         complete: json['complete'] as bool,
         omittedMessages: omitted,
         coverageNote: json['coverageNote'] as String?,
+        question: json['question'] == null
+            ? null
+            : SummaryQuestion.fromJson(
+                Map<String, dynamic>.from(json['question'] as Map),
+              ),
       );
     } on SummaryException {
       rethrow;
@@ -235,9 +288,13 @@ class SummaryUpload {
       throw const SummaryException('invalid_request');
     }
     if (source.messages.isEmpty) throw const SummaryException('no_messages');
-    // Use the same schema checks on each side of the trust boundary.
-    SummarySource.fromJson(source.toJson());
-    final encoded = jsonEncode(source.toJson());
+    // The manifest and durable job do not contain the question text.
+    final value = source.toJson()..remove('question');
+    if (request.question case final question?) {
+      value['question'] = question.toJson();
+    }
+    SummarySource.fromJson(value);
+    final encoded = jsonEncode(value);
     final bytes = utf8.encode(encoded);
     if (bytes.length > maxSourceBytes) {
       throw const SummaryException('source_too_large');
@@ -262,6 +319,7 @@ class SummaryUpload {
         'id': id,
         'conversation': conversation.toJson(),
         'request': request.toJson(),
+        if (request.question != null) 'question': true,
         'partCount': texts.length,
         'sourceDigest': digest,
         'sourceBytes': bytes.length,

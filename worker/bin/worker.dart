@@ -353,6 +353,7 @@ Future<void> main(List<String> arguments) async {
                     ? 'ready'
                     : 'not_configured',
                 'summaryVersion': 1,
+                'summaryQuestions': 1,
                 'dictation': engine.dictationConfigured
                     ? 'ready'
                     : 'not_configured',

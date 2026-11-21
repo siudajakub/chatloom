@@ -842,7 +842,9 @@ class PersonalReplica {
     final attempted = record['attempted'] as List? ?? const [];
     final unattemptedRequests = summaryCommands
         .where(
-          (op) => op.kind == 'summary.request' && !attempted.contains(op.opId),
+          (op) =>
+              (op.kind == 'summary.request' || op.kind == 'summary.question') &&
+              !attempted.contains(op.opId),
         )
         .toList();
     if (unattemptedRequests.isNotEmpty &&
@@ -1069,7 +1071,16 @@ class PersonalReplica {
     }
     if (record['metadataInFlight'] == accepted)
       record.remove('metadataInFlight');
-    final latest = revision >= (record['revision'] as int);
+    final previousRevision = record['revision'] as int;
+    // The worker may publish a failed outbox entry later than its successor.
+    // A same-revision recovery from processing to queued is valid until a
+    // terminal summary result has already arrived.
+    final lateSummaryProgress =
+        result.kind == 'summary.result' &&
+        revision == previousRevision &&
+        _summaryFinished(record) &&
+        (payload['state'] == 'queued' || payload['state'] == 'processing');
+    final latest = revision >= previousRevision && !lateSummaryProgress;
     if (result.kind == transcriptTextPartKind) {
       // One slice of a long transcript: never a state change of its own.
       _acceptTextPart(record, payload, revision);
