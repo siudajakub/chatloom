@@ -7,6 +7,7 @@ import 'dart:async';
 
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_grouping.dart';
 import 'package:chatloom/pages/chat/conversation_motion.dart';
@@ -421,9 +422,12 @@ class _ChatEventListState extends State<ChatEventList>
     _paletteSignature = Message.paletteSignature(roomPalette);
 
     final hasWallpaper =
-        controller.room.client.applicationAccountConfig.wallpaperUrl != null ||
-        NotionDisplayPreferences.of(context).wallpaperPreset !=
-            NotionWallpaperPreset.none;
+        ChatBackgroundStack.wallpaperModeOf(context) ??
+        resolveChatBackground(
+          context,
+          controller.room.client.applicationAccountConfig,
+          theme: roomPalette.theme,
+        ).hasWallpaper;
 
     // The unread divider sits above the oldest unread row: just newer than
     // the row that shows the read marker (or the nearest older row when the

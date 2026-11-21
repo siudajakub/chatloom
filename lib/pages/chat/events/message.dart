@@ -5,6 +5,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
 import 'package:chatloom/pages/chat/conversation_grouping.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
@@ -125,11 +126,19 @@ class Message extends StatelessWidget {
   });
 
   /// Resolves the private palette for [room]; call once per list build.
-  static ({ChatTheme? theme}) resolveRoomPalette(Room room) => (
-    theme: InboxProjection(
-      PersonalClient.of(room.client),
-    ).metadataFor(room).theme,
-  );
+  static ({ChatTheme? theme}) resolveRoomPalette(Room room) {
+    final projection = InboxProjection(PersonalClient.of(room.client));
+    final metadata = projection.metadataFor(room);
+    return (
+      theme:
+          effectiveChatTheme(metadata.theme) ??
+          (metadata.entityId == room.id
+              ? null
+              : effectiveChatTheme(
+                  projection.metadataForEntity(room.id).theme,
+                )),
+    );
+  }
 
   /// Value-comparable form of a resolved palette, so listeners can tell a
   /// real colour/background change from unrelated private-store activity.
@@ -209,9 +218,8 @@ class Message extends StatelessWidget {
     final display = event.getDisplayEvent(timeline);
     // Rounds render without a fill, so their text sits on the page.
     final round = MessageContent.rendersRound(display);
-    final palette = round
-        ? null
-        : (roomPalette ?? resolveRoomPalette(event.room)).theme;
+    final chatTheme = (roomPalette ?? resolveRoomPalette(event.room)).theme;
+    final palette = round ? null : chatTheme;
     final custom = own ? palette?.outgoingColor : palette?.incomingColor;
     final bubbleColors = ConversationBubbleColors.of(context);
     final textColor = custom is int
@@ -224,9 +232,8 @@ class Message extends StatelessWidget {
     ).resolve(Directionality.of(context));
     // Time, captions and names sit on the chat background, which a private
     // palette may make light in the dark theme (or the reverse).
-    final pageBackground = palette?.backgroundColor is int
-        ? Color(palette!.backgroundColor!)
-        : context.notion.colors.background;
+    final pageBackground =
+        chatSolidBackground(chatTheme) ?? context.notion.colors.background;
     // Over a wallpaper, metadata gets a chip of the page colour.
     final metaBackdrop = wallpaperMode ? pageBackground : null;
     // A caption (an Instagram reel's link, too) stays inside the media

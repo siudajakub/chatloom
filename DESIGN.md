@@ -121,12 +121,14 @@ roles (no contrast work per build or per scroll frame).
 | `avatar(name)` | `NotionInitialAvatar` background/initials, stable per name (8 hues) |
 | `network(key)` | brand colour of a network mark in Vivid, null otherwise (`NotionNetworkGlyph`) |
 
-Contrast is computed, not hand-picked: `NotionPalette.fillFor` moves a hue's
+Contrast is computed: `NotionPalette.fillFor` moves a hue's
 lightness until white text reaches 4.5:1, `inkOn` until the hue reads on the
 page; network marks need 3:1 (graphics). `test/notion/appearance_test.dart`
-checks every preset × intensity × brightness. Gradients exist only on
-Balanced and Vivid own bubbles (static per bubble, never scroll-driven);
-every other surface stays flat.
+checks every preset × intensity × brightness. Automatic uses the intensity
+rule above. The Outgoing bubbles setting also offers Solid, Soft sheen
+(vertical tonal gradient) and Colour blend (diagonal two-colour gradient).
+Gradients are static within each bubble. The chosen finish leaves the app
+accent and the incoming bubble intact.
 
 Bubbles are glass without blur: theme fills (own and incoming) are drawn at
 `NotionBubble.fillOpacity` (92 %) so a wallpaper glows through faintly, with
@@ -809,10 +811,23 @@ bubbles, with the message text size), clock format (`clockFormat`,
 the group's last message), delivery ticks, sender names, emoji-only size
 (`jumboEmoji`), two-line inbox previews (`inboxPreviewLines`), haptics
 (`NotionHaptics.enabled`, set by `ThemeController`) and built-in chat
-backgrounds (`wallpaperPreset` + `wallpaperStrength`, drawn by
-`NotionPresetWallpaper`: a static diagonal gradient in its own
-`RepaintBoundary`, never blurred or animated; the account picture wallpaper
-wins when set, and metadata chips switch to wallpaper mode for both).
+backgrounds (`wallpaperPreset` + `wallpaperStrength`). The Chat appearance
+preview uses production bubbles and the same background renderer as the
+timeline. The picker previews named backgrounds before Apply. Plain uses
+the page colour, Accent and Slate use solid tints, Aurora has a radial
+gradient and the remaining presets use directional linear gradients.
+Built-in backgrounds adapt to light and dark mode and paint once behind
+the timeline. Photo opacity and static blur apply to the saved account
+photo. Choosing a built-in background hides the photo on this device,
+and Use saved photo brings it back.
+
+The private Chat appearance editor applies a paired theme or independent
+background and message colours for a room or merged person. A known
+conversation background or a saved solid takes precedence over the
+device default. Plain explicitly uses the page colour, and App default
+inherits. The device default shows the account photo when enabled, then
+the built-in preset. `ChatBackgroundStack` resolves these rules once and
+shares the effective wallpaper state with the timeline metadata chips.
 
 Colour: `NotionAppearance.custom` (stored as `#RRGGBB` in
 `appearanceCustomAccent`) replaces the preset's hue; the palette tunes it

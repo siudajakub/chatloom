@@ -10,10 +10,13 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/conversation_message_gestures.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:matrix/src/models/timeline_chunk.dart';
+import 'package:personal_core/personal_core.dart' show ChatTheme;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../notion/conversation_test_support.dart';
@@ -39,6 +42,73 @@ Future<Uint8List> _png() async {
 }
 
 void main() {
+  testWidgets(
+    'private backgrounds override account photos and device presets',
+    (tester) async {
+      final photo = Uri.parse('mxc://example.invalid/wallpaper');
+      final account = ApplicationAccountConfig(wallpaperUrl: photo);
+      const device = NotionDisplayPreferences(
+        wallpaperPreset: NotionWallpaperPreset.ocean,
+        wallpaperStrength: .7,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              ChatBackgroundSelection resolve({
+                ChatTheme? theme,
+                NotionDisplayPreferences display = device,
+              }) => resolveChatBackground(
+                context,
+                account,
+                theme: theme,
+                display: display,
+              );
+
+              expect(resolve().photo, photo);
+              expect(resolve().hasWallpaper, isTrue);
+              final hidden = resolve(
+                display: device.copyWith(accountWallpaperEnabled: false),
+              );
+              expect(hidden.photo, isNull);
+              expect(hidden.preset, NotionWallpaperPreset.ocean);
+
+              final plain = resolve(
+                theme: const ChatTheme(wallpaperAsset: 'none'),
+              );
+              expect(plain.hasWallpaper, isFalse);
+              expect(plain.photo, isNull);
+              expect(plain.preset, NotionWallpaperPreset.none);
+
+              final custom = resolve(
+                theme: const ChatTheme(wallpaperAsset: 'aurora'),
+              );
+              expect(custom.photo, isNull);
+              expect(custom.preset, NotionWallpaperPreset.aurora);
+              expect(custom.strength, .7);
+              expect(custom.hasWallpaper, isTrue);
+
+              final solid = resolve(
+                theme: const ChatTheme(backgroundColor: 0xFF292329),
+              );
+              expect(solid.photo, isNull);
+              expect(solid.solid, const Color(0xFF292329));
+              expect(solid.hasWallpaper, isFalse);
+              expect(
+                resolve(
+                  theme: const ChatTheme(wallpaperAsset: 'unknown'),
+                ).photo,
+                photo,
+              );
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   group('PF-12 blurred wallpaper', () {
     tearDown(BlurredWallpaper.debugClearCache);
 

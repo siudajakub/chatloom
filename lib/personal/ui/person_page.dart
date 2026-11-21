@@ -13,11 +13,12 @@ import 'package:chatloom/personal/beeper_mute.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/media/avatar_resolver.dart';
 import 'package:chatloom/personal/organization_page.dart'
-    show pickAndUploadPrivateAvatar, showChatThemeDialog;
+    show pickAndUploadPrivateAvatar;
 import 'package:chatloom/personal/person_location.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/ui/chat_appearance_dialog.dart';
 import 'package:chatloom/personal/ui/chat_preferences_page.dart';
 import 'package:chatloom/personal/ui/notion_chat_details_content.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
@@ -28,6 +29,7 @@ import 'package:chatloom/personal/ui/notion_settings_body.dart'
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
 import 'package:chatloom/personal/ui/person_sheets.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/date_time_extension.dart';
 import 'package:chatloom/widgets/adaptive_dialogs/user_dialog.dart';
 import 'package:chatloom/widgets/avatar.dart';
@@ -524,13 +526,25 @@ class _PersonPageState extends State<PersonPage> {
   }
 
   Future<void> _colors(PersonGroup group, ConversationMetadata metadata) async {
-    final theme = await showChatThemeDialog(context, metadata.theme);
-    if (theme == null || !mounted || !_current) return;
+    final projection = InboxProjection(personal);
+    final sources = projection.activeSourcesOf(group);
+    final defaultRoom =
+        sources.where((room) => room.id == group.defaultRoomId).firstOrNull ??
+        sources.firstOrNull;
+    final result = await showChatAppearanceDialog(
+      context,
+      accountConfig: personal.client.applicationAccountConfig,
+      initial: metadata.theme,
+      inherited: defaultRoom == null
+          ? null
+          : projection.metadataForEntity(defaultRoom.id).theme,
+    );
+    if (result == null || !_current) return;
     await _change(
       () => updatePersonMetadata(
         personal,
         group,
-        (current) => current.setTheme(theme),
+        (current) => current.setTheme(result.theme),
       ),
     );
   }
@@ -919,6 +933,14 @@ class _PersonPageState extends State<PersonPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const NotionSectionHeader(title: 'Chat'),
+        NotionListRow(
+          leading: const Icon(Icons.palette_outlined),
+          title: 'Chat appearance',
+          subtitle: metadata.theme == null
+              ? 'Default appearance'
+              : 'Custom appearance',
+          onTap: editable ? () => _colors(group, metadata) : null,
+        ),
         NotionSettingsToggle(
           title: 'Pin chat',
           value: metadata.isPinned,
@@ -981,26 +1003,6 @@ class _PersonPageState extends State<PersonPage> {
           subtitle: 'Private archive · new activity brings it back',
           onTap: editable ? () => _archive(group, !metadata.archived) : null,
         ),
-        NotionListRow(
-          leading: const Icon(Icons.palette_outlined),
-          title: 'Chat colors',
-          subtitle: metadata.theme == null ? 'App colors' : 'Custom colors',
-          onTap: editable ? () => _colors(group, metadata) : null,
-        ),
-        if (metadata.theme != null)
-          NotionListRow(
-            leading: const Icon(Icons.format_color_reset_outlined),
-            title: 'Restore default colors',
-            onTap: editable
-                ? () => _change(
-                    () => updatePersonMetadata(
-                      personal,
-                      group,
-                      (current) => current.setTheme(null),
-                    ),
-                  )
-                : null,
-          ),
         const SizedBox(height: NotionSpace.md),
         NotionListRow(
           leading: Icon(Icons.call_split, color: tokens.colors.danger),

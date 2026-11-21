@@ -43,21 +43,17 @@ class ApplicationAccountConfig {
     this.wallpaperBlur,
   });
 
-  static double _sanitizedOpacity(double? opacity) {
-    if (opacity == null) return 1;
-    if (opacity > 1 || opacity < 0) return 1;
-    return opacity;
-  }
+  static double? _number(Object? value) =>
+      value is num && value.isFinite ? value.toDouble() : null;
 
   factory ApplicationAccountConfig.fromJson(Map<String, dynamic> json) =>
       ApplicationAccountConfig(
         wallpaperUrl: json['wallpaper_url'] is String
             ? Uri.tryParse(json['wallpaper_url'])
             : null,
-        wallpaperOpacity: _sanitizedOpacity(
-          json.tryGet<double>('wallpaper_opacity'),
-        ),
-        wallpaperBlur: json.tryGet<double>('wallpaper_blur'),
+        wallpaperOpacity:
+            _number(json['wallpaper_opacity'])?.clamp(0.0, 1.0) ?? 1,
+        wallpaperBlur: _number(json['wallpaper_blur'])?.clamp(0.0, 10.0),
       );
 
   Map<String, dynamic> toJson() => {

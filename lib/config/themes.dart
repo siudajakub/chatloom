@@ -36,7 +36,12 @@ abstract class ChatLoomThemes {
     NotionAppearance appearance = NotionAppearance.standard,
     NotionDisplayPreferences display = NotionDisplayPreferences.standard,
   ]) {
-    final theme = NotionTheme.build(brightness, appearance, display.trueBlack);
+    final theme = NotionTheme.build(
+      brightness,
+      appearance,
+      display.trueBlack,
+      display.bubbleFinish,
+    );
     return theme.copyWith(extensions: [...theme.extensions.values, display]);
   }
 }

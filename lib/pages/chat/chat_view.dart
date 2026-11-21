@@ -29,8 +29,6 @@ import 'package:chatloom/personal/personal_hub.dart';
 import 'package:chatloom/personal/ui/health_status_widgets.dart';
 import 'package:chatloom/personal/ui/message_request_callout.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/account_config.dart';
-import 'package:chatloom/widgets/matrix.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
@@ -52,8 +50,6 @@ class ChatView extends StatelessWidget {
         ? 16.0
         : 12.0;
     final scrollUpBannerEventId = controller.scrollUpBannerEventId;
-
-    final accountConfig = Matrix.of(context).client.applicationAccountConfig;
 
     final searching = controller.searchActive;
 
@@ -92,12 +88,7 @@ class ChatView extends StatelessWidget {
               (snapshot.hasError || controller.timelineLoadFailed) &&
               controller.timeline == null;
           final timelineBody = ConversationListGate(
-            revision: (
-              controller.timelineRevision,
-              controller.room.id,
-              accountConfig.wallpaperUrl != null,
-              failed,
-            ),
+            revision: (controller.timelineRevision, controller.room.id, failed),
             child: failed
                 ? ChatTimelineLoadError(onRetry: controller.retryLoadTimeline)
                 : ChatEventList(
@@ -131,14 +122,10 @@ class ChatView extends StatelessWidget {
                   activeThreadId == null) {
                 appbarBottomHeight += ChatAppBarListTile.fixedHeight;
               }
-              final chatBackground = InboxProjection.snapshot(
-                PersonalClient.of(controller.room.client),
-              ).metadataFor(controller.room).theme?.backgroundColor;
+              final chatTheme = controller.conversationPalette.theme;
               return Scaffold(
                 key: Key('chat_page'),
-                backgroundColor: chatBackground == null
-                    ? null
-                    : Color(chatBackground),
+                backgroundColor: chatSolidBackground(chatTheme),
                 // Timeline scrolls under the glass header (DESIGN.md "Glass").
                 extendBodyBehindAppBar: true,
                 appBar: AppBar(
@@ -258,24 +245,10 @@ class ChatView extends StatelessWidget {
                     onDragExited: controller.onDragExited,
                     child: SafeArea(
                       top: false,
-                      child: Stack(
+                      child: ChatBackgroundStack(
+                        client: controller.room.client,
+                        theme: chatTheme,
                         children: <Widget>[
-                          if (accountConfig.wallpaperUrl != null)
-                            ChatWallpaper(
-                              uri: accountConfig.wallpaperUrl!,
-                              opacity: accountConfig.wallpaperOpacity ?? 0.5,
-                              blur: accountConfig.wallpaperBlur ?? 0.0,
-                            )
-                          else
-                            // A built-in background (Appearance), local.
-                            NotionPresetWallpaper(
-                              preset: NotionDisplayPreferences.of(
-                                context,
-                              ).wallpaperPreset,
-                              strength: NotionDisplayPreferences.of(
-                                context,
-                              ).wallpaperStrength,
-                            ),
                           timelineBody,
                           ChatBridgeNotice(room: controller.room),
                           // Always mounted: it fades its list out when the

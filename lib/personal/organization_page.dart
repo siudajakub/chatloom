@@ -9,10 +9,13 @@ import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/merged_chat_page.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/private_avatar.dart';
+import 'package:chatloom/personal/ui/chat_appearance_dialog.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart'
     show notionNetworkLabel;
 import 'package:chatloom/personal/ui/notion_settings_load.dart';
+import 'package:chatloom/ui/notion/metadata_actions.dart';
 import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/widgets/cover_resize_image.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:material_ui/material_ui.dart';
@@ -20,17 +23,6 @@ import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
 import 'package:personal_core/personal_core.dart';
 import 'package:uuid/uuid.dart';
-
-const _bubbleColors = <int>[
-  0xffdfebdb,
-  0xffdbe6f5,
-  0xfff0dfe9,
-  0xfff1e6d2,
-  0xffd8eeec,
-  0xffe5def2,
-  0xfff2dddd,
-  0xffe5e7eb,
-];
 
 /// Actual private preferences, shared by the two clients through personal sync.
 class OrganizationPage extends StatefulWidget {
@@ -78,38 +70,29 @@ class _OrganizationPageState extends State<OrganizationPage> {
       personal.pending.values.any((op) => op.entityId == entityKey);
   bool _canEdit(String entityKey) =>
       personal.ready && !_busy && !_waiting(entityKey);
-  Future<void> _saveMetadata(ConversationMetadata metadata) async {
-    final existing = personal.values['org:${metadata.entityId}'];
-    final value = {...metadata.toJson()}.cast<String, dynamic>();
-    if (metadata.archived &&
-        (existing?['archived'] != true ||
-            !projection.metadataForEntity(metadata.entityId).archived)) {
-      value['archivedAt'] = DateTime.now().toUtc().toIso8601String();
-      final room = widget.room;
-      final group = room == null ? null : projection.groupFor(room);
-      final rooms = group == null
-          ? [?room]
-          : group.members
-                .map((m) => personal.client.getRoomById(m.roomId))
-                .whereType<Room>();
-      value['archiveSources'] = {
-        for (final source in rooms) source.id: source.lastEvent?.eventId,
-      };
-    } else if (metadata.archived && existing?['archiveSources'] is Map) {
-      value['archiveSources'] = existing!['archiveSources'];
-      if (existing['archivedAt'] is String) {
-        value['archivedAt'] = existing['archivedAt'];
-      }
-    }
-    await personal.put('org:${metadata.entityId}', value);
-  }
-
   Future<void> _avatar(String entity) =>
       pickAndUploadPrivateAvatar(personal, entity);
 
   Future<void> _theme(ConversationMetadata metadata) async {
-    final result = await showChatThemeDialog(context, metadata.theme);
-    if (result != null) await _saveMetadata(metadata.setTheme(result));
+    final result = await showChatAppearanceDialog(
+      context,
+      accountConfig: personal.client.applicationAccountConfig,
+      initial: metadata.theme,
+    );
+    if (result == null || !mounted) return;
+    final entity = metadata.entityId;
+    if (!NotionMetadataActions.canEdit(personal, entity)) {
+      throw StateError('Private changes are awaiting synchronization');
+    }
+    final key = 'org:$entity';
+    final latest = projection.metadataForEntity(entity);
+    await personal.put(
+      key,
+      {
+        ...?personal.values[key],
+        ...latest.setTheme(result.theme).toJson(),
+      }.cast<String, dynamic>(),
+    );
   }
 
   @override
@@ -175,6 +158,16 @@ class _OrganizationPageState extends State<OrganizationPage> {
                     ),
                     // Notifications, visibility, low priority, pin, archive
                     // and the nickname are on Chat details (CS-06).
+                    NotionListRow(
+                      leading: const Icon(Icons.palette_outlined),
+                      title: 'Chat appearance',
+                      subtitle: metadata.theme == null
+                          ? 'Default appearance'
+                          : 'Custom appearance',
+                      onTap: editing
+                          ? () => _run(() => _theme(metadata))
+                          : null,
+                    ),
                     _pressable(
                       ListTile(
                         leading: const Icon(Icons.add_photo_alternate_outlined),
@@ -203,28 +196,6 @@ class _OrganizationPageState extends State<OrganizationPage> {
                                   () => personal.delete(
                                     'avatar:${metadata.entityId}',
                                   ),
-                                )
-                              : null,
-                        ),
-                      ),
-                    ),
-                    _pressable(
-                      ListTile(
-                        leading: const Icon(Icons.palette_outlined),
-                        title: const Text('Conversation colours'),
-                        onTap: editing
-                            ? () => _run(() => _theme(metadata))
-                            : null,
-                      ),
-                    ),
-                    NotionSizeReveal(
-                      visible: metadata.theme != null,
-                      child: _pressable(
-                        ListTile(
-                          title: const Text('Restore default appearance'),
-                          onTap: editing
-                              ? () => _run(
-                                  () => _saveMetadata(metadata.setTheme(null)),
                                 )
                               : null,
                         ),
@@ -293,143 +264,6 @@ Future<bool> pickAndUploadPrivateAvatar(
   }
   await uploadPrivateAvatar(personal, entity, bytes);
   return true;
-}
-
-/// The private colours of a conversation; null when cancelled.
-Future<ChatTheme?> showChatThemeDialog(
-  BuildContext context,
-  ChatTheme? initial,
-) => showNotionCustomDialog<ChatTheme>(
-  context: context,
-  builder: (_) => _ThemeDialog(initial: initial),
-);
-
-class _ColorChoices extends StatelessWidget {
-  final List<int> colors;
-  final int? value;
-  final ValueChanged<int> onChanged;
-  const _ColorChoices({
-    required this.colors,
-    required this.value,
-    required this.onChanged,
-  });
-  @override
-  Widget build(BuildContext context) => Wrap(
-    spacing: 4,
-    children: [
-      for (var i = 0; i < colors.length; i++)
-        Semantics(
-          label: 'Color ${i + 1}',
-          selected: value == colors[i],
-          button: true,
-          child: IconButton(
-            tooltip: 'Color ${i + 1}',
-            onPressed: () => onChanged(colors[i]),
-            icon: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: Color(colors[i]),
-                shape: BoxShape.circle,
-              ),
-              // The check pops in on the picked swatch and out of the old one.
-              child: NotionPop(
-                visible: value == colors[i],
-                playOnMount: false,
-                bounce: false,
-                child: Icon(
-                  Icons.check,
-                  color: Color(colors[i]).computeLuminance() > 0.5
-                      ? Colors.black
-                      : Colors.white,
-                  size: 18,
-                ),
-              ),
-            ),
-          ),
-        ),
-    ],
-  );
-}
-
-class _ThemeDialog extends StatefulWidget {
-  final ChatTheme? initial;
-  const _ThemeDialog({this.initial});
-  @override
-  State<_ThemeDialog> createState() => _ThemeDialogState();
-}
-
-class _ThemeDialogState extends State<_ThemeDialog> {
-  late int? incoming = widget.initial?.incomingColor;
-  late int? outgoing = widget.initial?.outgoingColor;
-  late int? background = widget.initial?.backgroundColor;
-  @override
-  Widget build(BuildContext context) => NotionDialog(
-    title: 'Conversation colors',
-    content: SizedBox(
-      width: double.infinity,
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Incoming message appearance'),
-            _ColorChoices(
-              colors: _bubbleColors,
-              value: incoming,
-              onChanged: (v) => setState(() => incoming = v),
-            ),
-            const SizedBox(height: 16),
-            const Text('Outgoing message appearance'),
-            _ColorChoices(
-              colors: _bubbleColors,
-              value: outgoing,
-              onChanged: (v) => setState(() => outgoing = v),
-            ),
-            const SizedBox(height: 16),
-            const Text('Background'),
-            _ColorChoices(
-              colors: [
-                0xfffafafa,
-                0xfff0f2f4,
-                0xfff8f4ec,
-                0xffecf3f0,
-                0xff202329,
-                0xff292329,
-              ],
-              value: background,
-              onChanged: (v) => setState(() => background = v),
-            ),
-            NotionButton.ghost(
-              label: 'Use default colors',
-              onPressed: () => setState(() {
-                incoming = null;
-                outgoing = null;
-                background = null;
-              }),
-            ),
-          ],
-        ),
-      ),
-    ),
-    actions: [
-      NotionButton.ghost(
-        label: 'Cancel',
-        onPressed: () => Navigator.pop(context),
-      ),
-      NotionButton.primary(
-        label: 'Save',
-        onPressed: () => Navigator.pop(
-          context,
-          ChatTheme(
-            incomingColor: incoming,
-            outgoingColor: outgoing,
-            backgroundColor: background,
-          ),
-        ),
-      ),
-    ],
-  );
 }
 
 /// The blob is SDK-encrypted before upload. Only its encrypted journal metadata

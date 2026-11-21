@@ -5,20 +5,18 @@
 
 import 'package:chatloom/config/themes.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/chat_appearance_preview.dart';
 import 'package:chatloom/pages/chat/chat_wallpaper.dart';
 import 'package:chatloom/pages/chat/conversation_bubble.dart';
-import 'package:chatloom/pages/chat/conversation_grouping.dart';
-import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'settings_style.dart';
 
-/// Appearance, Notion style: a live preview, then colour intensity, accent,
-/// theme and wallpaper. Every choice applies at once.
+/// Live chat preview, background and message styles, then app appearance
+/// and layout settings.
 class SettingsStyleView extends StatelessWidget {
   final SettingsStyleController controller;
 
@@ -48,15 +46,30 @@ class SettingsStyleView extends StatelessWidget {
           builder: (context, _) => Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // The preview builds bubbles, an inbox row and maybe a
-              // wallpaper; keep it out of the page transition. Same height
-              // before and after, so nothing below moves when it appears.
-              AfterRouteTransition(
-                placeholder: const SizedBox(height: _previewMinHeight),
-                child: _AppearancePreview(
-                  wallpaper: controller.wallpaperUrl,
-                  opacity: controller.wallpaperOpacity,
-                  blur: controller.wallpaperBlur,
+              const NotionSectionHeader(title: 'Chat appearance'),
+              ExcludeSemantics(
+                child: ChatAppearancePreview(
+                  background: ChatBackground(
+                    client: client,
+                    selection: resolveChatBackground(
+                      context,
+                      controller.wallpaperPreview,
+                      display: controller.displayPreferences,
+                    ),
+                  ),
+                ),
+              ),
+              _WallpaperSection(controller: controller),
+              NotionPickerRow<NotionBubbleFinish>(
+                label: 'Outgoing bubbles',
+                icon: Icons.chat_bubble_outline,
+                value: controller.displayPreferences.bubbleFinish,
+                options: [
+                  for (final finish in NotionBubbleFinish.values)
+                    NotionChoice(finish, finish.label),
+                ],
+                onChanged: (finish) => controller.setDisplayPreferences(
+                  controller.displayPreferences.copyWith(bubbleFinish: finish),
                 ),
               ),
               const NotionSectionHeader(title: 'Colour intensity'),
@@ -109,10 +122,7 @@ class SettingsStyleView extends StatelessWidget {
                   controller.displayPreferences.copyWith(trueBlack: v),
                 ),
               ),
-              _DisplaySettings(
-                controller: controller,
-                wallpaper: _WallpaperSection(controller: controller),
-              ),
+              _DisplaySettings(controller: controller),
             ],
           ),
         ),
@@ -120,115 +130,6 @@ class SettingsStyleView extends StatelessWidget {
     );
   }
 }
-
-/// The preview's height at text scale 1 on a phone, so the placeholder and
-/// the built preview take the same room.
-const double _previewMinHeight = 300;
-
-/// A sample inbox row and conversation drawn with the real presenters
-/// ([NotionInboxRow], [ConversationBubble]), so it shows exactly what the
-/// chosen colours do: avatars, unread badge, incoming and own bubbles.
-class _AppearancePreview extends StatelessWidget {
-  final Uri? wallpaper;
-  final double opacity;
-  final double blur;
-  const _AppearancePreview({
-    required this.wallpaper,
-    required this.opacity,
-    required this.blur,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.notion;
-    final display = NotionDisplayPreferences.of(context);
-    Widget text(String value) => Text(value, style: NotionType.body);
-    final wallpaper = this.wallpaper;
-    return ExcludeSemantics(
-      child: IgnorePointer(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: _previewMinHeight),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: tokens.colors.background,
-              borderRadius: NotionRadius.lgAll,
-              border: Border.all(color: tokens.colors.border),
-            ),
-            child: ClipRRect(
-              borderRadius: NotionRadius.lgAll,
-              child: Stack(
-                children: [
-                  if (wallpaper != null)
-                    Positioned.fill(
-                      child: ChatWallpaper(
-                        uri: wallpaper,
-                        opacity: opacity,
-                        blur: blur,
-                      ),
-                    )
-                  else
-                    NotionPresetWallpaper(
-                      preset: display.wallpaperPreset,
-                      strength: display.wallpaperStrength,
-                    ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      NotionSpace.sm,
-                      NotionSpace.xxs,
-                      NotionSpace.sm,
-                      NotionSpace.sm,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        NotionInboxRow(
-                          avatar: const NotionInitialAvatar(name: 'Anna Lis'),
-                          name: 'Anna Lis',
-                          preview: 'Sed diam nonumy eirmod tempor',
-                          time: '12:04',
-                          unreadCount: 2,
-                          onTap: _noop,
-                        ),
-                        Divider(color: tokens.colors.border),
-                        ConversationBubble(
-                          outgoing: false,
-                          groupPosition: ConversationGroupPosition.first,
-                          body: text('Lorem ipsum dolor sit amet'),
-                        ),
-                        ConversationBubble(
-                          outgoing: false,
-                          groupPosition: ConversationGroupPosition.last,
-                          avatar: const NotionInitialAvatar(
-                            name: 'Anna Lis',
-                            size: NotionBubble.avatar,
-                          ),
-                          body: text('Consetetur sadipscing elitr?'),
-                        ),
-                        ConversationBubble(
-                          outgoing: true,
-                          groupPosition: ConversationGroupPosition.first,
-                          body: text('At vero eos et accusam'),
-                        ),
-                        ConversationBubble(
-                          outgoing: true,
-                          groupPosition: ConversationGroupPosition.last,
-                          body: text('Stet clita kasd gubergren'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-void _noop() {}
 
 /// Three cards, each showing its own pair of mini bubbles in that intensity.
 class _IntensitySelector extends StatelessWidget {
@@ -513,53 +414,145 @@ class _WallpaperSection extends StatelessWidget {
   final SettingsStyleController controller;
   const _WallpaperSection({required this.controller});
 
+  Future<void> _chooseBackground(BuildContext context) async {
+    final prefs = controller.displayPreferences;
+    final usingPhoto =
+        controller.wallpaperUrl != null && prefs.accountWallpaperEnabled;
+    var selected = usingPhoto ? null : prefs.wallpaperPreset;
+    final choice = await showNotionSheet<NotionWallpaperPreset>(
+      context: context,
+      title: 'Chat background',
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ChatAppearancePreview(
+                      background: ChatBackground(
+                        selection: resolveChatBackground(
+                          context,
+                          controller.wallpaperPreview,
+                          display: selected == null
+                              ? prefs
+                              : prefs.copyWith(
+                                  wallpaperPreset: selected,
+                                  accountWallpaperEnabled: false,
+                                ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: NotionSpace.md),
+                    NotionWallpaperGallery(
+                      selected: selected,
+                      strength: prefs.wallpaperStrength,
+                      onSelected: (preset) => setState(() => selected = preset),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: NotionSpace.md),
+            NotionButton.primary(
+              label: 'Apply background',
+              onPressed: selected == null
+                  ? null
+                  : () => Navigator.of(context).pop(selected),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !context.mounted || !controller.mounted) return;
+    await controller.setDisplayPreferences(
+      controller.displayPreferences.copyWith(
+        wallpaperPreset: choice,
+        accountWallpaperEnabled: false,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final colors = context.notion.colors;
-    final hasWallpaper = controller.wallpaperUrl != null;
+    final prefs = controller.displayPreferences;
+    final hasPhoto = controller.wallpaperUrl != null;
+    final usingPhoto = hasPhoto && prefs.accountWallpaperEnabled;
+    final busy = controller.wallpaperBusy;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         NotionListRow(
           leading: const Icon(Icons.wallpaper_outlined),
-          title: hasWallpaper ? 'Change wallpaper' : 'Choose wallpaper',
-          subtitle: 'Shown behind every conversation',
-          trailing: controller.wallpaperBusy
-              ? const NotionDelayedSpinner()
-              : null,
-          onTap: controller.wallpaperBusy ? null : controller.setWallpaper,
+          title: 'Chat background',
+          subtitle: usingPhoto ? 'Account photo' : prefs.wallpaperPreset.label,
+          trailing: const Icon(Icons.chevron_right),
+          onTap: busy ? null : () => _chooseBackground(context),
         ),
-        NotionSizeReveal(
-          visible: hasWallpaper,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              NotionListRow(
-                leading: Icon(Icons.delete_outline, color: colors.danger),
-                title: 'Remove wallpaper',
-                onTap: hasWallpaper ? controller.removeWallpaper : null,
+        if (!usingPhoto && prefs.wallpaperPreset != NotionWallpaperPreset.none)
+          _SliderRow(
+            label: 'Background strength',
+            value: prefs.wallpaperStrength,
+            min: .15,
+            max: 1,
+            divisions: 17,
+            valueLabel: '${(prefs.wallpaperStrength * 100).round()}%',
+            onChanged: (strength) => controller.setDisplayPreferences(
+              controller.displayPreferences.copyWith(
+                wallpaperStrength: strength,
               ),
-              _SliderRow(
-                label: L10n.of(context).opacity,
-                value: controller.wallpaperOpacity.clamp(0.1, 1.0),
-                min: 0.1,
-                max: 1.0,
-                divisions: 9,
-                onChanged: controller.updateWallpaperOpacity,
-                onChangeEnd: controller.saveWallpaperOpacity,
-              ),
-              _SliderRow(
-                label: L10n.of(context).blur,
-                value: controller.wallpaperBlur.clamp(0.0, 10.0),
-                min: 0.0,
-                max: 10.0,
-                divisions: 10,
-                onChanged: controller.updateWallpaperBlur,
-                onChangeEnd: controller.saveWallpaperBlur,
-              ),
-            ],
+            ),
+            onChangeEnd: (_) {},
           ),
+        if (hasPhoto && !usingPhoto)
+          NotionListRow(
+            leading: const Icon(Icons.image_outlined),
+            title: 'Use saved photo',
+            onTap: busy
+                ? null
+                : () => controller.setDisplayPreferences(
+                    controller.displayPreferences.copyWith(
+                      accountWallpaperEnabled: true,
+                    ),
+                  ),
+          ),
+        NotionListRow(
+          leading: const Icon(Icons.add_photo_alternate_outlined),
+          title: hasPhoto ? 'Change photo' : 'Choose photo',
+          subtitle: hasPhoto ? null : 'Saved to your account',
+          trailing: busy ? const NotionDelayedSpinner() : null,
+          onTap: busy ? null : controller.setWallpaper,
         ),
+        if (usingPhoto) ...[
+          _SliderRow(
+            label: 'Photo opacity',
+            value: controller.wallpaperOpacity,
+            min: 0,
+            max: 1,
+            divisions: 20,
+            valueLabel: '${(controller.wallpaperOpacity * 100).round()}%',
+            onChanged: controller.updateWallpaperOpacity,
+            onChangeEnd: controller.saveWallpaperOpacity,
+          ),
+          _SliderRow(
+            label: 'Photo blur',
+            value: controller.wallpaperBlur,
+            min: 0,
+            max: 10,
+            divisions: 10,
+            valueLabel: controller.wallpaperBlur.round().toString(),
+            onChanged: controller.updateWallpaperBlur,
+            onChangeEnd: controller.saveWallpaperBlur,
+          ),
+          NotionListRow(
+            leading: const Icon(Icons.delete_outline),
+            title: 'Remove saved wallpaper',
+            onTap: busy ? null : controller.removeWallpaper,
+          ),
+        ],
       ],
     );
   }
@@ -643,11 +636,8 @@ class _DisplayToggle extends StatelessWidget {
 /// Presentation controls use the same preferences and production presenters
 /// as the live preview. Defaults restore only these local visual choices.
 class _DisplaySettings extends StatelessWidget {
-  const _DisplaySettings({required this.controller, required this.wallpaper});
+  const _DisplaySettings({required this.controller});
   final SettingsStyleController controller;
-
-  /// The account wallpaper rows, shown under the built-in backgrounds.
-  final Widget wallpaper;
 
   @override
   Widget build(BuildContext context) {
@@ -832,25 +822,6 @@ class _DisplaySettings extends StatelessWidget {
           value.deliveryTicks,
           (v) => update(value.copyWith(deliveryTicks: v)),
         ),
-        const NotionSectionHeader(title: 'Chat background'),
-        _WallpaperPresets(
-          selected: value.wallpaperPreset,
-          onSelected: (v) => update(value.copyWith(wallpaperPreset: v)),
-        ),
-        NotionSizeReveal(
-          visible:
-              value.wallpaperPreset != NotionWallpaperPreset.none &&
-              controller.wallpaperUrl == null,
-          child: slider(
-            'Background strength',
-            value.wallpaperStrength,
-            .15,
-            1,
-            17,
-            (v) => update(value.copyWith(wallpaperStrength: v)),
-          ),
-        ),
-        wallpaper,
         const NotionSectionHeader(title: 'Effects'),
         toggle(
           'Reduce motion',
@@ -896,96 +867,6 @@ class _DisplaySettings extends StatelessWidget {
   }
 }
 
-/// Built-in chat backgrounds as round swatches, like the accent colours.
-class _WallpaperPresets extends StatelessWidget {
-  const _WallpaperPresets({required this.selected, required this.onSelected});
-
-  final NotionWallpaperPreset selected;
-  final ValueChanged<NotionWallpaperPreset> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.notion;
-    return Wrap(
-      spacing: NotionSpace.xxs,
-      runSpacing: NotionSpace.xxs,
-      children: [
-        for (final preset in NotionWallpaperPreset.values)
-          Semantics(
-            button: true,
-            selected: preset == selected,
-            label: '${preset.label} background',
-            excludeSemantics: true,
-            child: Tooltip(
-              message: preset.label,
-              child: InkWell(
-                onTap: () => onSelected(preset),
-                customBorder: const CircleBorder(),
-                child: SizedBox.square(
-                  dimension: NotionSize.touchTarget,
-                  child: Center(
-                    child: Container(
-                      width: _swatch,
-                      height: _swatch,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: preset == selected
-                              ? tokens.colors.text
-                              : Colors.transparent,
-                          width: 2,
-                        ),
-                      ),
-                      child: _PresetDisc(preset: preset),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _PresetDisc extends StatelessWidget {
-  const _PresetDisc({required this.preset});
-
-  final NotionWallpaperPreset preset;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = context.notion;
-    final colors = preset.colorsOf(context);
-    return Container(
-      width: _swatch - _swatchRing,
-      height: _swatch - _swatchRing,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: colors.isEmpty ? tokens.colors.background : null,
-        border: Border.all(color: tokens.colors.border),
-        gradient: colors.isEmpty
-            ? null
-            : LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: colors.length == 1
-                    ? [colors.first, colors.first]
-                    : colors,
-              ),
-      ),
-      child: colors.isEmpty
-          ? Icon(
-              Icons.block,
-              size: NotionSize.iconSm,
-              color: tokens.colors.textTertiary,
-            )
-          : null,
-    );
-  }
-}
-
 /// The custom accent picker: hue and saturation sliders over a live
 /// swatch and a sample own bubble in the resulting palette. Returns the
 /// colour, or null when dismissed.
@@ -1008,27 +889,29 @@ Future<Color?> showCustomAccentSheet(
           tokens.colors,
           Theme.of(context).brightness,
         );
-        final gradient = palette.bubbleGradient;
+        final theme = Theme.of(context);
+        final bubbles = ConversationBubbleColors.of(context).withPalette(
+          palette,
+          finish: NotionDisplayPreferences.of(context).bubbleFinish,
+        );
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: NotionSpace.md,
-                  vertical: NotionSpace.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: gradient == null ? palette.bubble : null,
-                  gradient: gradient == null
-                      ? null
-                      : LinearGradient(colors: gradient),
-                  borderRadius: NotionRadius.pillAll,
-                ),
-                child: Text(
+            Theme(
+              data: theme.copyWith(
+                extensions: [
+                  ...theme.extensions.values.where(
+                    (extension) => extension is! ConversationBubbleColors,
+                  ),
+                  bubbles,
+                ],
+              ),
+              child: const ConversationBubble(
+                outgoing: true,
+                body: Text(
                   'Your messages look like this',
-                  style: NotionType.body.copyWith(color: palette.onBubble),
+                  style: NotionType.body,
                 ),
               ),
             ),

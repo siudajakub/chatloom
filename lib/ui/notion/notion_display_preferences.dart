@@ -47,6 +47,17 @@ enum NotionJumboEmoji {
   const NotionJumboEmoji(this.label, this.factor);
 }
 
+/// The fill of outgoing messages using the app palette.
+enum NotionBubbleFinish {
+  automatic('Automatic'),
+  solid('Solid'),
+  sheen('Soft sheen'),
+  gradient('Colour blend');
+
+  final String label;
+  const NotionBubbleFinish(this.label);
+}
+
 /// Local visual preferences. They never change account or privacy policies.
 @immutable
 class NotionDisplayPreferences
@@ -63,6 +74,7 @@ class NotionDisplayPreferences
     this.messageAvatars = true,
     this.bubbleWidth = .78,
     this.bubbleRadius = 18,
+    this.bubbleFinish = NotionBubbleFinish.automatic,
     this.reduceMotion = false,
     this.glassEnabled = true,
     this.trueBlack = false,
@@ -76,6 +88,7 @@ class NotionDisplayPreferences
     this.haptics = true,
     this.wallpaperPreset = NotionWallpaperPreset.none,
     this.wallpaperStrength = .5,
+    this.accountWallpaperEnabled = true,
   });
 
   static const standard = NotionDisplayPreferences();
@@ -91,6 +104,7 @@ class NotionDisplayPreferences
   final bool messageAvatars;
   final double bubbleWidth;
   final double bubbleRadius;
+  final NotionBubbleFinish bubbleFinish;
   final bool reduceMotion;
   final bool glassEnabled;
 
@@ -105,6 +119,7 @@ class NotionDisplayPreferences
   final bool haptics;
   final NotionWallpaperPreset wallpaperPreset;
   final double wallpaperStrength;
+  final bool accountWallpaperEnabled;
 
   static NotionDisplayPreferences of(BuildContext context) =>
       Theme.of(context).extension<NotionDisplayPreferences>() ?? standard;
@@ -153,6 +168,11 @@ class NotionDisplayPreferences
       messageAvatars: flag('messageAvatars', true),
       bubbleWidth: number('bubbleWidth', .78, .6, .95),
       bubbleRadius: number('bubbleRadius', 18, 6, 28),
+      bubbleFinish: choice(
+        NotionBubbleFinish.values,
+        'bubbleFinish',
+        NotionBubbleFinish.automatic,
+      ),
       reduceMotion: flag('reduceMotion', false),
       glassEnabled: flag('glassEnabled', true),
       trueBlack: flag('trueBlack', false),
@@ -182,6 +202,7 @@ class NotionDisplayPreferences
         NotionWallpaperPreset.none,
       ),
       wallpaperStrength: number('wallpaperStrength', .5, .15, 1),
+      accountWallpaperEnabled: flag('accountWallpaperEnabled', true),
     );
   }
 
@@ -209,6 +230,7 @@ class NotionDisplayPreferences
     'messageAvatars': messageAvatars,
     'bubbleWidth': bubbleWidth,
     'bubbleRadius': bubbleRadius,
+    'bubbleFinish': bubbleFinish.name,
     'reduceMotion': reduceMotion,
     'glassEnabled': glassEnabled,
     'trueBlack': trueBlack,
@@ -222,6 +244,7 @@ class NotionDisplayPreferences
     'haptics': haptics,
     'wallpaperPreset': wallpaperPreset.name,
     'wallpaperStrength': wallpaperStrength,
+    'accountWallpaperEnabled': accountWallpaperEnabled,
   };
 
   String encode() => jsonEncode(toJson());
@@ -239,6 +262,7 @@ class NotionDisplayPreferences
     bool? messageAvatars,
     double? bubbleWidth,
     double? bubbleRadius,
+    NotionBubbleFinish? bubbleFinish,
     bool? reduceMotion,
     bool? glassEnabled,
     bool? trueBlack,
@@ -252,6 +276,7 @@ class NotionDisplayPreferences
     bool? haptics,
     NotionWallpaperPreset? wallpaperPreset,
     double? wallpaperStrength,
+    bool? accountWallpaperEnabled,
   }) => NotionDisplayPreferences.fromJson({
     'inboxScale': inboxScale ?? this.inboxScale,
     'inboxAvatars': inboxAvatars ?? this.inboxAvatars,
@@ -264,6 +289,7 @@ class NotionDisplayPreferences
     'messageAvatars': messageAvatars ?? this.messageAvatars,
     'bubbleWidth': bubbleWidth ?? this.bubbleWidth,
     'bubbleRadius': bubbleRadius ?? this.bubbleRadius,
+    'bubbleFinish': (bubbleFinish ?? this.bubbleFinish).name,
     'reduceMotion': reduceMotion ?? this.reduceMotion,
     'glassEnabled': glassEnabled ?? this.glassEnabled,
     'trueBlack': trueBlack ?? this.trueBlack,
@@ -277,6 +303,8 @@ class NotionDisplayPreferences
     'haptics': haptics ?? this.haptics,
     'wallpaperPreset': (wallpaperPreset ?? this.wallpaperPreset).name,
     'wallpaperStrength': wallpaperStrength ?? this.wallpaperStrength,
+    'accountWallpaperEnabled':
+        accountWallpaperEnabled ?? this.accountWallpaperEnabled,
   });
 
   // Layout settings switch atomically: intermediate geometry during a
@@ -302,6 +330,7 @@ class NotionDisplayPreferences
           messageAvatars == other.messageAvatars &&
           bubbleWidth == other.bubbleWidth &&
           bubbleRadius == other.bubbleRadius &&
+          bubbleFinish == other.bubbleFinish &&
           reduceMotion == other.reduceMotion &&
           glassEnabled == other.glassEnabled &&
           trueBlack == other.trueBlack &&
@@ -314,7 +343,8 @@ class NotionDisplayPreferences
           inboxPreviewLines == other.inboxPreviewLines &&
           haptics == other.haptics &&
           wallpaperPreset == other.wallpaperPreset &&
-          wallpaperStrength == other.wallpaperStrength;
+          wallpaperStrength == other.wallpaperStrength &&
+          accountWallpaperEnabled == other.accountWallpaperEnabled;
 
   @override
   int get hashCode => Object.hashAll([
@@ -329,6 +359,7 @@ class NotionDisplayPreferences
     messageAvatars,
     bubbleWidth,
     bubbleRadius,
+    bubbleFinish,
     reduceMotion,
     glassEnabled,
     trueBlack,
@@ -342,6 +373,7 @@ class NotionDisplayPreferences
     haptics,
     wallpaperPreset,
     wallpaperStrength,
+    accountWallpaperEnabled,
   ]);
 }
 

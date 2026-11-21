@@ -2,6 +2,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'notion_contrast.dart';
+import 'notion_display_preferences.dart';
 import 'notion_tokens.dart';
 
 /// How much colour the interface shows (DESIGN.md "Colour system").
@@ -184,7 +185,7 @@ class NotionPalette {
   final Color accentTint;
 
   /// Own message bubble: a solid representative colour (quotes, placeholders
-  /// and selection blend from it) plus an optional gradient (Vivid).
+  /// and selection blend from it) plus an optional gradient.
   final Color bubble;
   final List<Color>? bubbleGradient;
 
@@ -366,6 +367,34 @@ class NotionPalette {
       avatars: avatars,
       networks: networks,
     );
+  }
+
+  /// Resolves an explicit bubble finish without changing other palette roles.
+  List<Color>? bubbleGradientFor(NotionBubbleFinish finish) {
+    if (finish == NotionBubbleFinish.automatic) return bubbleGradient;
+    if (finish == NotionBubbleFinish.solid) return null;
+    if (finish == NotionBubbleFinish.gradient &&
+        appearance.intensity == NotionIntensity.vivid &&
+        bubbleGradient != null) {
+      return bubbleGradient;
+    }
+
+    final hsl = HSLColor.fromColor(bubble);
+    Color stop(HSLColor tone, double lift) => fillFor(
+      tone.withLightness((tone.lightness + lift).clamp(0.0, 1.0)).toColor(),
+      onBubble,
+      // Muted uses off-white ink, which needs extra headroom on glass.
+      minimum: 5.7,
+    );
+
+    if (finish == NotionBubbleFinish.sheen) {
+      return [stop(hsl, .075), stop(hsl, -.055)];
+    }
+    final companion = appearance.gradientEnd;
+    final end = companion == null
+        ? hsl
+        : hsl.withHue(HSLColor.fromColor(companion).hue);
+    return [stop(hsl, .035), stop(end, -.10)];
   }
 
   /// The palette of the original grey look; used outside a theme.

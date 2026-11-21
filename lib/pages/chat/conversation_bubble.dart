@@ -20,7 +20,7 @@ class ConversationBubbleColors
   final Color metadata;
   final Color? _outgoingText;
 
-  /// Vivid own bubbles: a gradient instead of the solid [outgoing] fill.
+  /// Optional gradient instead of the solid [outgoing] fill.
   /// [outgoing] stays the solid stand-in for quotes and placeholders.
   final List<Color>? outgoingGradient;
 
@@ -52,15 +52,17 @@ class ConversationBubbleColors
       );
 
   /// This side with its own bubble taken from [palette].
-  ConversationBubbleColors withPalette(NotionPalette palette) =>
-      ConversationBubbleColors(
-        incoming: incoming,
-        outgoing: palette.bubble,
-        text: text,
-        metadata: metadata,
-        outgoingText: palette.onBubble,
-        outgoingGradient: palette.bubbleGradient,
-      );
+  ConversationBubbleColors withPalette(
+    NotionPalette palette, {
+    NotionBubbleFinish finish = NotionBubbleFinish.automatic,
+  }) => ConversationBubbleColors(
+    incoming: incoming,
+    outgoing: palette.bubble,
+    text: text,
+    metadata: metadata,
+    outgoingText: palette.onBubble,
+    outgoingGradient: palette.bubbleGradientFor(finish),
+  );
 
   /// Registered by `NotionTheme`; the fallback keeps isolated fixtures working.
   static ConversationBubbleColors of(BuildContext context) {
@@ -238,11 +240,15 @@ class ConversationBubble extends StatelessWidget {
           factor: display.messageTextScale,
           child: body,
         );
-        // Own bubbles take the accent fill (a gradient in Vivid) and its
-        // text colour; a private chat palette overrides both.
+        // Own bubbles take the accent fill and its text colour; a private
+        // chat palette overrides both.
         final ownFill = outgoing && backgroundColor == null;
         final gradient = ownFill ? colors.outgoingGradient : null;
-        final ink = ownFill ? colors.outgoingText : colors.text;
+        final diagonal = display.bubbleFinish == NotionBubbleFinish.gradient;
+        final customFill = backgroundColor;
+        final ink = customFill != null
+            ? NotionContrast.on(customFill)
+            : (ownFill ? colors.outgoingText : colors.text);
         // Glass: theme fills are faintly translucent over the wallpaper and
         // carry a hairline rim; a private chat palette stays opaque.
         final themeFill = backgroundColor == null;
@@ -251,9 +257,7 @@ class ConversationBubble extends StatelessWidget {
         final dark = Theme.of(context).brightness == Brightness.dark;
         final rim = !themeFill
             ? null
-            : ownFill
-            ? Colors.white.withValues(alpha: dark ? .16 : .22)
-            : (dark ? Colors.white : Colors.black).withValues(alpha: .06);
+            : NotionBubble.rim(dark: dark, outgoing: ownFill);
         final maxWidth = math.max(
           0.0,
           math.min(
@@ -296,9 +300,7 @@ class ConversationBubble extends StatelessWidget {
                         color: gradient != null
                             ? null
                             : backgroundColor ??
-                                  (outgoing
-                                          ? colors.outgoing
-                                          : colors.incoming)
+                                  (outgoing ? colors.outgoing : colors.incoming)
                                       .withValues(
                                         alpha: glass(
                                           outgoing
@@ -309,8 +311,12 @@ class ConversationBubble extends StatelessWidget {
                         gradient: gradient == null
                             ? null
                             : LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
+                                begin: diagonal
+                                    ? AlignmentDirectional.topStart
+                                    : Alignment.topCenter,
+                                end: diagonal
+                                    ? AlignmentDirectional.bottomEnd
+                                    : Alignment.bottomCenter,
                                 colors: [
                                   for (final c in gradient)
                                     c.withValues(alpha: glass(c)),

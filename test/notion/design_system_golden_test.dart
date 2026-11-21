@@ -897,6 +897,37 @@ void main() {
     'buttons',
     (tester) => _golden(tester, 'buttons-dark', _buttons()),
   );
+  for (final brightness in Brightness.values) {
+    testWidgets('wallpaper gallery ${brightness.name}', (tester) async {
+      final dark = brightness == Brightness.dark;
+      await _golden(
+        tester,
+        'wallpaper-gallery-${brightness.name}',
+        _page([
+          const NotionSectionHeader(title: 'Chat background'),
+          NotionWallpaperGallery(
+            selected: dark ? NotionWallpaperPreset.aurora : null,
+            strength: .75,
+            onSelected: (_) {},
+          ),
+        ]),
+        size: dark ? const Size(390, 320) : const Size(680, 240),
+        brightness: brightness,
+      );
+
+      final context = tester.element(find.byType(NotionWallpaperGallery));
+      final ink = context.notion.colors.textSecondary;
+      for (final preset in NotionWallpaperPreset.values) {
+        for (final stop in preset.colorsOf(context)) {
+          expect(
+            NotionContrast.ratio(ink, stop),
+            greaterThanOrEqualTo(NotionContrast.minimum),
+            reason: '${preset.label} wallpaper at full strength',
+          );
+        }
+      }
+    });
+  }
   testWidgets(
     'bubbles and replies',
     (tester) => _golden(tester, 'bubbles-replies-dark', _bubbles()),

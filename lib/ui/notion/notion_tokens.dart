@@ -170,6 +170,10 @@ abstract final class NotionBubble {
   /// Inner hairline that catches light on a bubble's edge (glass rim).
   static const double rimWidth = .5;
 
+  static Color rim({required bool dark, required bool outgoing}) => outgoing
+      ? Colors.white.withValues(alpha: dark ? .16 : .22)
+      : (dark ? Colors.white : Colors.black).withValues(alpha: .06);
+
   /// Between bubbles of one group, and between groups.
   static const double groupGap = 2;
   static const double seriesGap = 14;

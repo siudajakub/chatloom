@@ -5,11 +5,188 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:chatloom/ui/notion/notion.dart';
+import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:chatloom/widgets/mxc_image.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:personal_core/personal_core.dart' show ChatTheme;
+
+typedef ChatBackgroundSelection = ({
+  Uri? photo,
+  double opacity,
+  double blur,
+  NotionWallpaperPreset preset,
+  double strength,
+  Color? solid,
+  bool hasWallpaper,
+});
+
+NotionWallpaperPreset? _conversationPreset(ChatTheme? theme) =>
+    NotionWallpaperPreset.values
+        .where((preset) => preset.name == theme?.wallpaperAsset)
+        .firstOrNull;
+
+/// Older clients saved an empty object when resetting a conversation.
+ChatTheme? effectiveChatTheme(ChatTheme? theme) =>
+    theme?.backgroundColor != null ||
+        theme?.incomingColor != null ||
+        theme?.outgoingColor != null ||
+        _conversationPreset(theme) != null
+    ? theme
+    : null;
+
+Color? chatSolidBackground(ChatTheme? theme) {
+  final color = theme?.backgroundColor;
+  return color == null || _conversationPreset(theme) != null
+      ? null
+      : Color(color);
+}
+
+/// A private background choice takes priority over the device defaults.
+/// Unknown preset IDs fall back to the saved solid or the app default.
+ChatBackgroundSelection resolveChatBackground(
+  BuildContext context,
+  ApplicationAccountConfig accountConfig, {
+  ChatTheme? theme,
+  NotionDisplayPreferences? display,
+}) {
+  final preferences = display ?? NotionDisplayPreferences.of(context);
+  final override = _conversationPreset(theme);
+  final solid = chatSolidBackground(theme);
+  final photo =
+      override == null && solid == null && preferences.accountWallpaperEnabled
+      ? accountConfig.wallpaperUrl
+      : null;
+  final preset =
+      override ??
+      (solid != null || photo != null
+          ? NotionWallpaperPreset.none
+          : preferences.wallpaperPreset);
+  return (
+    photo: photo,
+    opacity: accountConfig.wallpaperOpacity ?? .5,
+    blur: accountConfig.wallpaperBlur ?? 0,
+    preset: preset,
+    strength: preferences.wallpaperStrength,
+    solid: solid,
+    hasWallpaper: photo != null || preset != NotionWallpaperPreset.none,
+  );
+}
+
+/// The decorative layer shared by the timeline and appearance previews.
+class ChatBackground extends StatelessWidget {
+  const ChatBackground({super.key, required this.selection, this.client});
+
+  final ChatBackgroundSelection selection;
+  final Client? client;
+
+  @override
+  Widget build(BuildContext context) {
+    final (
+      :photo,
+      :opacity,
+      :blur,
+      :preset,
+      :strength,
+      :solid,
+      hasWallpaper: _,
+    ) = selection;
+    if (photo != null) {
+      return Positioned.fill(
+        child: IgnorePointer(
+          child: ChatWallpaper(
+            key: ValueKey(photo),
+            uri: photo,
+            opacity: opacity,
+            blur: blur,
+            client: client,
+          ),
+        ),
+      );
+    }
+    if (solid != null) {
+      return Positioned.fill(child: ColoredBox(color: solid));
+    }
+    return NotionPresetWallpaper(preset: preset, strength: strength);
+  }
+}
+
+/// The rows depend only on whether their metadata needs a backing chip.
+/// Photo changes and slider edits leave the scrolling list mounted.
+class ChatBackgroundStack extends StatefulWidget {
+  const ChatBackgroundStack({
+    super.key,
+    required this.client,
+    required this.theme,
+    required this.children,
+  });
+
+  final Client client;
+  final ChatTheme? theme;
+  final List<Widget> children;
+
+  static bool? wallpaperModeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<_ChatWallpaperMode>()
+      ?.hasWallpaper;
+
+  @override
+  State<ChatBackgroundStack> createState() => _ChatBackgroundStackState();
+}
+
+class _ChatBackgroundStackState extends State<ChatBackgroundStack> {
+  late Stream<SyncUpdate> _accountUpdates = _updatesOf(widget.client);
+
+  Stream<SyncUpdate> _updatesOf(Client client) => client.onSync.stream.where(
+    (sync) =>
+        sync.accountData?.any(
+          (data) =>
+              data.type == ApplicationAccountConfigExtension.accountDataKey,
+        ) ??
+        false,
+  );
+
+  @override
+  void didUpdateWidget(ChatBackgroundStack oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.client, widget.client)) {
+      _accountUpdates = _updatesOf(widget.client);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => StreamBuilder(
+    stream: _accountUpdates,
+    builder: (context, _) {
+      final selection = resolveChatBackground(
+        context,
+        widget.client.applicationAccountConfig,
+        theme: widget.theme,
+      );
+      return _ChatWallpaperMode(
+        hasWallpaper: selection.hasWallpaper,
+        child: Stack(
+          children: [
+            ChatBackground(selection: selection, client: widget.client),
+            ...widget.children,
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _ChatWallpaperMode extends InheritedWidget {
+  const _ChatWallpaperMode({required this.hasWallpaper, required super.child});
+
+  final bool hasWallpaper;
+
+  @override
+  bool updateShouldNotify(_ChatWallpaperMode oldWidget) =>
+      hasWallpaper != oldWidget.hasWallpaper;
+}
 
 /// The account wallpaper behind a conversation (single and merged chats).
 ///
@@ -25,6 +202,7 @@ import 'package:matrix/matrix.dart';
 class ChatWallpaper extends StatelessWidget {
   final Uri uri;
   final double opacity;
+  final Client? client;
 
   /// Static blur sigma chosen in the style settings; 0 adds no filter.
   final double blur;
@@ -34,34 +212,45 @@ class ChatWallpaper extends StatelessWidget {
     required this.uri,
     required this.opacity,
     this.blur = 0,
+    this.client,
   });
 
   @override
   Widget build(BuildContext context) {
     if (blur > 0) {
-      final client = Matrix.of(context).client;
+      final account = client ?? Matrix.of(context).client;
       return RepaintBoundary(
         child: BlurredWallpaper(
           cacheKey: uri.toString(),
           blur: blur,
           opacity: opacity.clamp(0.0, 1.0),
-          load: () => client.downloadMxcCached(uri),
+          load: () => account.downloadMxcCached(uri),
         ),
       );
     }
-    final size = MediaQuery.sizeOf(context);
-    final image = MxcImage(
-      cacheKey: uri.toString(),
-      uri: uri,
-      fit: BoxFit.cover,
-      height: size.height,
-      width: size.width,
-      isThumbnail: false,
-      decodeToCover: true,
-      opacity: opacity.clamp(0.0, 1.0),
-      placeholder: (_) => const SizedBox.shrink(),
+    return RepaintBoundary(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final viewport = MediaQuery.sizeOf(context);
+          return MxcImage(
+            client: client,
+            cacheKey: uri.toString(),
+            uri: uri,
+            fit: BoxFit.cover,
+            height: constraints.hasBoundedHeight
+                ? constraints.maxHeight
+                : viewport.height,
+            width: constraints.hasBoundedWidth
+                ? constraints.maxWidth
+                : viewport.width,
+            isThumbnail: false,
+            decodeToCover: true,
+            opacity: opacity.clamp(0.0, 1.0),
+            placeholder: (_) => const SizedBox.shrink(),
+          );
+        },
+      ),
     );
-    return RepaintBoundary(child: image);
   }
 }
 
@@ -160,7 +349,7 @@ class _BlurredWallpaperState extends State<BlurredWallpaper> {
       return;
     }
     unawaited(
-      _render(size, scale).then(
+      _render(size, scale, key.$2).then(
         (image) {
           BlurredWallpaper._store(key, image);
           if (!mounted || generation != _generation) return;
@@ -174,7 +363,7 @@ class _BlurredWallpaperState extends State<BlurredWallpaper> {
     );
   }
 
-  Future<ui.Image> _render(Size size, double scale) async {
+  Future<ui.Image> _render(Size size, double scale, double blur) async {
     final bytes = await widget.load();
     final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
     final descriptor = await ui.ImageDescriptor.encoded(buffer);
@@ -196,7 +385,7 @@ class _BlurredWallpaperState extends State<BlurredWallpaper> {
       try {
         final recorder = ui.PictureRecorder();
         final canvas = Canvas(recorder);
-        final sigma = widget.blur * scale;
+        final sigma = blur * scale;
         final target = Offset.zero & Size(width.toDouble(), height.toDouble());
         canvas.drawImageRect(
           source,

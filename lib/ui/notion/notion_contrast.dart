@@ -19,9 +19,14 @@ abstract final class NotionContrast {
     return (hi + .05) / (lo + .05);
   }
 
-  /// Near-black or white, whichever reads better on [background].
-  static Color on(Color background) =>
-      ratio(_dark, background) >= ratio(_light, background) ? _dark : _light;
+  /// Near-black or white, with black for midtones that need extra contrast.
+  static Color on(Color background) {
+    final dark = ratio(_dark, background);
+    final light = ratio(_light, background);
+    if (dark >= minimum && dark >= light) return _dark;
+    if (light >= minimum) return _light;
+    return const Color(0xFF000000);
+  }
 
   /// [preferred] when it reaches [minimum] on [background]; otherwise the
   /// closest blend from [preferred] towards [on] that does, so muted text

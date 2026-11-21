@@ -7,7 +7,6 @@ import 'dart:async';
 
 import 'package:chatloom/personal/ui/notion_settings_page.dart';
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/ui/notion/notion_display_preferences.dart';
 import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/widgets/theme_builder.dart';
@@ -86,13 +85,52 @@ class SettingsStyleController extends State<SettingsStyle> {
 
   Client get _client => Matrix.of(context).client;
 
-  /// The stored wallpaper, unless a removal is on its way to the server.
-  Uri? get wallpaperUrl =>
-      _removingWallpaper ? null : _client.applicationAccountConfig.wallpaperUrl;
-  bool _removingWallpaper = false;
+  static const _accountDataKey =
+      ApplicationAccountConfigExtension.accountDataKey;
 
-  /// True while a picked wallpaper uploads (inline progress on the row).
+  // Keep acknowledged changes visible until the next wallpaper sync arrives.
+  // Slider drafts are local and cover the time before the request completes.
+  ({Client account, BasicEvent? previous, ApplicationAccountConfig settings})?
+  _savedWallpaper;
+  Future<void> _sliderWrites = Future.value();
+  double? _wallpaperOpacity;
+  double? _wallpaperBlur;
   bool wallpaperBusy = false;
+
+  ApplicationAccountConfig _wallpaperFor(Client account) {
+    final saved = _savedWallpaper;
+    if (saved != null &&
+        identical(saved.account, account) &&
+        identical(saved.previous, account.accountData[_accountDataKey])) {
+      return saved.settings;
+    }
+    return account.applicationAccountConfig;
+  }
+
+  Uri? get wallpaperUrl => _wallpaperFor(_client).wallpaperUrl;
+  double get wallpaperOpacity =>
+      _wallpaperOpacity ?? _wallpaperFor(_client).wallpaperOpacity ?? .5;
+  double get wallpaperBlur =>
+      _wallpaperBlur ?? _wallpaperFor(_client).wallpaperBlur ?? 0;
+
+  ApplicationAccountConfig get wallpaperPreview => ApplicationAccountConfig(
+    wallpaperUrl: wallpaperUrl,
+    wallpaperOpacity: wallpaperOpacity,
+    wallpaperBlur: wallpaperBlur,
+  );
+
+  Future<void> _saveWallpaper(
+    Client account,
+    ApplicationAccountConfig settings,
+  ) async {
+    final previous = account.accountData[_accountDataKey];
+    await account.setApplicationAccountConfig(settings);
+    _savedWallpaper = (
+      account: account,
+      previous: previous,
+      settings: settings,
+    );
+  }
 
   void _explain(String message) {
     if (!mounted) return;
@@ -102,86 +140,109 @@ class SettingsStyleController extends State<SettingsStyle> {
   }
 
   Future<void> setWallpaper() async {
-    final picked = await selectFiles(context, type: FileType.image);
-    final pickedFile = picked.firstOrNull;
-    if (pickedFile == null || !mounted) return;
-    final client = _client;
+    final account = _client;
+    await _editPhoto(
+      account,
+      () async {
+        final picked = await selectFiles(context, type: FileType.image);
+        final file = picked.firstOrNull;
+        if (file == null || !mounted || !identical(account, _client)) return;
+        final bytes = await file.readAsBytes();
+        if (!mounted || !identical(account, _client)) return;
+        final url = await account.uploadContent(bytes, filename: file.name);
+        if (!mounted || !identical(account, _client)) return;
+        final previous = _wallpaperFor(account);
+        await _saveWallpaper(
+          account,
+          ApplicationAccountConfig(
+            wallpaperUrl: url,
+            wallpaperOpacity: previous.wallpaperUrl == null
+                ? .5
+                : previous.wallpaperOpacity,
+            wallpaperBlur: previous.wallpaperBlur,
+          ),
+        );
+        if (!mounted || !identical(account, _client)) return;
+        await setDisplayPreferences(
+          displayPreferences.copyWith(accountWallpaperEnabled: true),
+        );
+      },
+      failure: 'Could not set the photo. Check your connection and try again.',
+    );
+  }
+
+  Future<void> removeWallpaper() {
+    final account = _client;
+    return _editPhoto(
+      account,
+      () => _saveWallpaper(account, const ApplicationAccountConfig()),
+      failure:
+          'Could not remove the photo. Check your connection and try again.',
+    );
+  }
+
+  Future<void> _editPhoto(
+    Client account,
+    Future<void> Function() operation, {
+    required String failure,
+  }) async {
+    if (wallpaperBusy) return;
     setState(() => wallpaperBusy = true);
     try {
-      final url = await client.uploadContent(
-        await pickedFile.readAsBytes(),
-        filename: pickedFile.name,
-      );
-      await client.updateApplicationAccountConfig(
-        ApplicationAccountConfig(wallpaperUrl: url),
-      );
-    } catch (e, s) {
-      Logs().w('Could not set the chat wallpaper', e, s);
-      _explain(
-        'Could not set the wallpaper. Check your connection and try again.',
-      );
+      await _sliderWrites;
+      if (!mounted || !identical(account, _client)) return;
+      await operation();
+    } catch (_) {
+      if (mounted && identical(account, _client)) _explain(failure);
     } finally {
       if (mounted) setState(() => wallpaperBusy = false);
     }
   }
 
-  Future<void> removeWallpaper() async {
-    final client = _client;
-    setState(() => _removingWallpaper = true);
-    try {
-      await client.setApplicationAccountConfig(
-        const ApplicationAccountConfig(wallpaperUrl: null, wallpaperBlur: null),
-      );
-    } catch (e, s) {
-      Logs().w('Could not remove the chat wallpaper', e, s);
-      _explain(
-        'Could not remove the wallpaper. Check your connection and try again.',
-      );
-    } finally {
-      if (mounted) setState(() => _removingWallpaper = false);
-    }
+  void updateWallpaperOpacity(double value) {
+    if (!wallpaperBusy) setState(() => _wallpaperOpacity = value);
   }
 
-  double get wallpaperOpacity =>
-      _wallpaperOpacity ??
-      _client.applicationAccountConfig.wallpaperOpacity ??
-      0.5;
-  double? _wallpaperOpacity;
+  void updateWallpaperBlur(double value) {
+    if (!wallpaperBusy) setState(() => _wallpaperBlur = value);
+  }
 
-  void updateWallpaperOpacity(double opacity) =>
-      setState(() => _wallpaperOpacity = opacity);
+  Future<void> saveWallpaperOpacity(double opacity) =>
+      _saveWallpaperSlider(opacity: opacity);
 
-  Future<void> saveWallpaperOpacity(double opacity) => _saveWallpaperValue(
-    ApplicationAccountConfig(wallpaperOpacity: opacity),
-    revert: () => _wallpaperOpacity = null,
-  );
+  Future<void> saveWallpaperBlur(double blur) =>
+      _saveWallpaperSlider(blur: blur);
 
-  double get wallpaperBlur =>
-      _wallpaperBlur ?? _client.applicationAccountConfig.wallpaperBlur ?? 0.5;
-  double? _wallpaperBlur;
-
-  void updateWallpaperBlur(double blur) =>
-      setState(() => _wallpaperBlur = blur);
-
-  Future<void> saveWallpaperBlur(double blur) => _saveWallpaperValue(
-    ApplicationAccountConfig(wallpaperBlur: blur),
-    revert: () => _wallpaperBlur = null,
-  );
-
-  /// The slider already shows the new value; the save runs in the
-  /// background and a failure returns the slider to the stored value.
-  Future<void> _saveWallpaperValue(
-    ApplicationAccountConfig config, {
-    required VoidCallback revert,
-  }) async {
-    try {
-      await _client.updateApplicationAccountConfig(config);
-    } catch (e, s) {
-      Logs().w('Could not save the chat wallpaper setting', e, s);
-      if (!mounted) return;
-      setState(revert);
-      _explain('Could not save the change. Check your connection.');
-    }
+  Future<void> _saveWallpaperSlider({double? opacity, double? blur}) {
+    if (wallpaperBusy) return Future.value();
+    final account = _client;
+    _sliderWrites = _sliderWrites.then((_) async {
+      if (!mounted || !identical(account, _client)) return;
+      final previous = _wallpaperFor(account);
+      if (previous.wallpaperUrl == null) return;
+      try {
+        await _saveWallpaper(
+          account,
+          ApplicationAccountConfig(
+            wallpaperUrl: previous.wallpaperUrl,
+            wallpaperOpacity: opacity ?? previous.wallpaperOpacity,
+            wallpaperBlur: blur ?? previous.wallpaperBlur,
+          ),
+        );
+      } catch (_) {
+        if (mounted && identical(account, _client)) {
+          _explain('Could not save the change. Check your connection.');
+        }
+      } finally {
+        if (mounted && identical(account, _client)) {
+          setState(() {
+            if (opacity == _wallpaperOpacity) _wallpaperOpacity = null;
+            if (blur == _wallpaperBlur) _wallpaperBlur = null;
+          });
+        }
+      }
+    });
+    return _sliderWrites;
   }
 
   @override

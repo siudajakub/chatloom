@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../pages/chat/conversation_bubble.dart';
 import 'notion_appearance.dart';
+import 'notion_display_preferences.dart';
 import 'notion_motion.dart';
 import 'notion_tokens.dart';
 
@@ -36,6 +37,7 @@ abstract final class NotionTheme {
     Brightness brightness, [
     NotionAppearance appearance = NotionAppearance.standard,
     bool trueBlack = false,
+    NotionBubbleFinish bubbleFinish = NotionBubbleFinish.automatic,
   ]) {
     final dark = brightness == Brightness.dark;
     final black = dark && trueBlack;
@@ -166,7 +168,7 @@ abstract final class NotionTheme {
         (dark
                 ? ConversationBubbleColors.dark
                 : ConversationBubbleColors.light(scheme))
-            .withPalette(palette),
+            .withPalette(palette, finish: bubbleFinish),
       ],
       scaffoldBackgroundColor: background,
       canvasColor: background,

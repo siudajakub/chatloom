@@ -83,7 +83,6 @@ import 'package:chatloom/personal/ui/person_page.dart';
 import 'package:chatloom/personal/ui/person_sheets.dart'
     show personSourceActivity;
 import 'package:chatloom/ui/notion/notion.dart';
-import 'package:chatloom/utils/account_config.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/macos_desktop.dart';
@@ -455,17 +454,16 @@ class _MergedChatPageState extends State<_MergedChatView>
   String _computePersonalSignature() {
     final projection = InboxProjection.snapshot(personal);
     final person = projection.metadataForEntity('person:${group.id}');
+    final appearance = effectiveChatTheme(person.theme);
     return jsonEncode([
       projection.personName(group),
       person.avatarAsset,
       // "Send messages via" changes the composer's network.
       projection.preferencesFor(group.id).routing.name,
-      person.theme?.toJson(),
-      for (final member in group.members)
-        switch (personal.client.getRoomById(member.roomId)) {
-          final Room room => projection.metadataFor(room).theme?.toJson(),
-          null => null,
-        },
+      appearance?.toJson(),
+      if (appearance == null)
+        for (final member in group.members)
+          projection.metadataForEntity(member.roomId).theme?.toJson(),
     ]);
   }
 
@@ -1311,10 +1309,19 @@ class _MergedChatPageState extends State<_MergedChatView>
   @override
   ({ChatTheme? theme}) get conversationPalette {
     final projection = InboxProjection.snapshot(personal);
-    final person = projection.metadataForEntity('person:${group.id}').theme;
+    final person = effectiveChatTheme(
+      projection.metadataForEntity('person:${group.id}').theme,
+    );
     if (person != null) return (theme: person);
-    final room = _anyRoom;
-    return (theme: room == null ? null : projection.metadataFor(room).theme);
+    final sources = projection.activeSourcesOf(group);
+    final room =
+        sources.where((room) => room.id == group.defaultRoomId).firstOrNull ??
+        sources.firstOrNull;
+    return (
+      theme: room == null
+          ? null
+          : effectiveChatTheme(projection.metadataForEntity(room.id).theme),
+    );
   }
 
   @override
@@ -3086,9 +3093,8 @@ class _MergedChatPageState extends State<_MergedChatView>
     // One name everywhere (inbox, header, person page, People settings).
     final displayName = projection.personName(group);
     final anyRoom = _anyRoom;
-    final background = conversationPalette.theme?.backgroundColor;
+    final chatTheme = conversationPalette.theme;
     final notice = problem;
-    final wallpaper = personal.client.applicationAccountConfig;
     final retry = unavailable.isNotEmpty || timelines.isEmpty;
     final manage = !retry && _inactive.isNotEmpty;
     // Brand-new undecryptable rows get a moment for a key on its way, as in
@@ -3119,7 +3125,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         }
       },
       child: Scaffold(
-        backgroundColor: background == null ? null : Color(background),
+        backgroundColor: chatSolidBackground(chatTheme),
         // Messages scroll under the glass header (DESIGN.md "Glass").
         extendBodyBehindAppBar: true,
         appBar: AppBar(
@@ -3290,23 +3296,10 @@ class _MergedChatPageState extends State<_MergedChatView>
                 },
                 child: SafeArea(
                   top: false,
-                  child: Stack(
+                  child: ChatBackgroundStack(
+                    client: personal.client,
+                    theme: chatTheme,
                     children: [
-                      if (wallpaper.wallpaperUrl != null)
-                        ChatWallpaper(
-                          uri: wallpaper.wallpaperUrl!,
-                          opacity: wallpaper.wallpaperOpacity ?? 0.5,
-                          blur: wallpaper.wallpaperBlur ?? 0.0,
-                        )
-                      else
-                        NotionPresetWallpaper(
-                          preset: NotionDisplayPreferences.of(
-                            context,
-                          ).wallpaperPreset,
-                          strength: NotionDisplayPreferences.of(
-                            context,
-                          ).wallpaperStrength,
-                        ),
                       // Composer keystrokes, notices and send state rebuild
                       // this page; the gate hands back the previous list
                       // subtree unless something the rows render changed.
