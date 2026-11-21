@@ -89,14 +89,18 @@ void main() {
   });
   tearDown(() => personal.dispose());
 
-  Future<SummaryResult> run({bool Function()? current, Duration? timeout}) =>
+  Future<SummaryResult> run({
+    bool Function()? current,
+    Duration? timeout,
+    SummaryRequest request = const SummaryRequest(),
+  }) =>
       SummaryJournal(
         personal: personal,
         isCurrent: current ?? () => true,
         timeout: timeout ?? const Duration(seconds: 5),
       ).generate(
         conversation: conversation,
-        request: const SummaryRequest(),
+        request: request,
         source: source,
         cancellation: cancellation,
       );
@@ -130,6 +134,43 @@ void main() {
     },
   );
 
+  test('old summary worker never receives question source text', () async {
+    await expectLater(
+      run(request: SummaryRequest(question: SummaryQuestion('Who decided?'))),
+      throwsA(
+        isA<SummaryException>().having(
+          (e) => e.code,
+          'code',
+          'summary_questions_not_supported',
+        ),
+      ),
+    );
+    expect(personal.calls, isEmpty);
+  });
+
+  test(
+    'a committed result can arrive during a temporary readiness loss',
+    () async {
+      personal.onRequest = (id) {
+        personal.available = false;
+        personal.workerReadiness = null;
+        personal.entries[id] = {
+          'state': 'done',
+          ...SummaryResult(
+            text: 'Fictional summary',
+            model: 'fixture/model',
+            messageCount: 1,
+            startedAt: at,
+            endedAt: at,
+            complete: true,
+          ).toJson(),
+        };
+      };
+      expect((await run()).text, 'Fictional summary');
+      expect(personal.calls, ['part', 'summary.request']);
+    },
+  );
+
   test(
     'source parts precede the request and only the private result returns',
     () async {
@@ -156,6 +197,30 @@ void main() {
     personal.onPart = cancellation.cancel;
     await expectLater(run(), throwsA(isA<SummaryCancelledException>()));
     expect(personal.calls, ['part', 'delete']);
+  });
+
+  test('questions use a dedicated command that old workers ignore', () async {
+    personal.workerReadiness = WorkerReadiness(
+      receivedAt: DateTime.now(),
+      healthy: true,
+      verified: true,
+      summary: 'ready',
+      summaryVersion: 1,
+      summaryQuestions: 1,
+    );
+    final started = Completer<void>();
+    personal.onRequest = (_) => started.complete();
+    final result = run(
+      request: SummaryRequest(question: SummaryQuestion('Who decided?')),
+    );
+    final stops = expectLater(
+      result,
+      throwsA(isA<SummaryCancelledException>()),
+    );
+    await started.future;
+    expect(personal.calls, ['part', 'summary.question']);
+    cancellation.cancel();
+    await stops;
   });
 
   test(
@@ -205,6 +270,7 @@ void main() {
     final ready = WorkerReadiness.fromPayload({
       'summary': 'ready',
       'summaryVersion': 1,
+      'summaryQuestions': 1,
     }, at);
     final unknown = WorkerReadiness.fromPayload({
       'summary': 'invented',
@@ -212,6 +278,7 @@ void main() {
     }, at);
     expect(ready.summary, 'ready');
     expect(ready.summaryVersion, 1);
+    expect(ready.summaryQuestions, 1);
     expect(unknown.summary, isNull);
     expect(unknown.summaryVersion, isNull);
     expect(ready, isNot(unknown));

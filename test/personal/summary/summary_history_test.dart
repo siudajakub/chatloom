@@ -115,6 +115,44 @@ void main() {
   });
 
   test(
+    'merged last N pages the limiting source before choosing messages',
+    () async {
+      const firstRef = ConversationRef(
+        accountId: '@fixture:example.invalid',
+        roomId: '!first:example.invalid',
+      );
+      const secondRef = ConversationRef(
+        accountId: '@fixture:example.invalid',
+        roomId: '!second:example.invalid',
+      );
+      final first = _Source([
+        [_entry(0, id: 'same-fixture-id'), _entry(3)],
+        [_entry(6)],
+      ]);
+      final second = _Source([
+        [_entry(1, id: 'same-fixture-id'), _entry(2, omission: 'encrypted')],
+        [_entry(4), _entry(5)],
+      ]);
+      final result = await collector.collect(
+        source: MergedSummaryHistorySource({
+          firstRef: first,
+          secondRef: second,
+        }),
+        request: const SummaryRequest(amount: 3),
+        now: _now,
+      );
+      expect(result.messages.map((m) => m.text), [
+        'Fixture message 1',
+        'Fixture message 0',
+      ]);
+      expect(result.omittedMessages, 1);
+      expect(first.page, 0);
+      expect(second.page, 1);
+      expect(first.disposed && second.disposed, isTrue);
+    },
+  );
+
+  test(
     'hour window includes boundary and excludes future sync events',
     () async {
       final source = _Source([

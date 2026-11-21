@@ -43,10 +43,10 @@ macOS wymaga pełnego Xcode, wybranej wersji SDK i własnego signing. CommandLin
 
 ## Funkcje
 
-Podsumowanie grupy jest dostępne w menu trzech kropek otwartego czatu:
-liczba ostatnich wiadomości, godziny, dni lub cała dostępna historia;
-trzy poziomy szczegółowości i wynik po polsku lub angielsku. Korzysta
-z klucza OpenRouter na workerze i prywatnego szyfrowanego journalu.
+Menu rozmowy pozwala podsumować grupę lub scalony czat po polsku albo po
+angielsku. „Ask about conversation” odpowiada na pytania w grupach, rozmowach
+prywatnych i scalonych na podstawie ostatnich N wiadomości lub całej dostępnej
+historii. Obie funkcje korzystają z OpenRoutera na workerze i szyfrowanego journalu.
 [Zakres, prywatność i ograniczenia](docs/conversation-summaries.md).
 
 Aktualny `client/` łączy Notion dark v2, funkcje Personal, FCM/startup i Androidowe kółeczka Telegrama. Stary Skiff pozostaje materiałem referencyjnym. „Send Later” zachowuje źródłową odpowiedź i wątek dla tekstu i mediów; podczas edycji jest niedostępne. Anulowanie transkrypcji usuwa wyłącznie zlecenie, którego publikacja jeszcze nie ruszyła; później zapisuje trwałą prośbę o anulowanie. Worker chroni nową ręczną próbę przed spóźnionym wynikiem starej. Niepoprawne metadane grup pozostają zapisane i nie blokują pozostałych rozmów.

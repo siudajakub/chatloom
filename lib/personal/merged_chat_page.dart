@@ -73,6 +73,7 @@ import 'package:chatloom/personal/round_video/telegram_round_service.dart';
 import 'package:chatloom/personal/scheduled_composer.dart';
 import 'package:chatloom/personal/seen_chat_notifications.dart';
 import 'package:chatloom/personal/send_warmup.dart';
+import 'package:chatloom/personal/summary/conversation_summary.dart';
 import 'package:chatloom/personal/text_split.dart';
 import 'package:chatloom/personal/ui/forward_sheet.dart';
 import 'package:chatloom/personal/stickers/sticker_message_actions.dart';
@@ -2885,6 +2886,10 @@ class _MergedChatPageState extends State<_MergedChatView>
       _openSearch();
       return;
     }
+    if (action == 'summary' || action == 'summary.ask') {
+      await _openConversationAssistant(asking: action == 'summary.ask');
+      return;
+    }
     if (action == 'schedule') {
       await _schedule();
       return;
@@ -2921,6 +2926,39 @@ class _MergedChatPageState extends State<_MergedChatView>
         _notify('The reminder could not be saved. Retry from this source.');
       }
     }
+  }
+
+  Future<void> _openConversationAssistant({required bool asking}) async {
+    if (!_stillHere()) return;
+    final frozenGroup = group;
+    final projection = InboxProjection.snapshot(personal);
+    final rooms = projection
+        .activeSourcesOf(frozenGroup)
+        .where(canUseConversationAssistant)
+        .toList();
+    bool current() {
+      if (!_stillHere() || !samePersonMembers(group, frozenGroup)) return false;
+      final currentProjection = InboxProjection.snapshot(personal);
+      final latest = currentProjection.groupById(frozenGroup.id);
+      return latest != null &&
+          samePersonMembers(latest, frozenGroup) &&
+          const ListEquality<Room>().equals(
+            currentProjection
+                .activeSourcesOf(latest)
+                .where(canUseConversationAssistant)
+                .toList(),
+            rooms,
+          );
+    }
+
+    await showMergedConversationAssistant(
+      context,
+      rooms: rooms,
+      linkedRoomCount: frozenGroup.members.length,
+      chatName: projection.personName(frozenGroup),
+      isCurrent: current,
+      asking: asking,
+    );
   }
 
   /// The person's chats a read marker can go to: joined and part of this
@@ -3209,15 +3247,22 @@ class _MergedChatPageState extends State<_MergedChatView>
                   label: 'Conversation actions',
                   icon: Icons.more_horiz,
                   alignEnd: true,
-                  entries: () => conversationQuickActions(
-                    merged: true,
-                    editing: editEvent != null,
-                    mute: conversationMuteState(
-                      context,
+                  entries: () {
+                    final canUseAssistant = InboxProjection.snapshot(
                       personal,
-                      'person:${group.id}',
-                    ),
-                  ),
+                    ).activeSourcesOf(group).any(canUseConversationAssistant);
+                    return conversationQuickActions(
+                      merged: true,
+                      editing: editEvent != null,
+                      canSummarize: canUseAssistant,
+                      canAsk: canUseAssistant,
+                      mute: conversationMuteState(
+                        context,
+                        personal,
+                        'person:${group.id}',
+                      ),
+                    );
+                  },
                   onSelected: (action) => _quickAction(action, anchor: anchor),
                 ),
               ),

@@ -55,6 +55,7 @@ Future<void> _open(
   bool reducedMotion = false,
   Listenable? accessChanges,
   bool Function()? isCurrent,
+  bool asking = false,
 }) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
@@ -86,6 +87,7 @@ Future<void> _open(
                 summarize: runner,
                 accessChanges: accessChanges,
                 isCurrent: isCurrent,
+                asking: asking,
               ),
             ),
           ),
@@ -96,6 +98,43 @@ Future<void> _open(
   await _advance(tester);
   await tester.tap(find.byKey(const ValueKey('summary-open')));
   await _advance(tester);
+}
+
+void _questionTests() {
+  testWidgets('asks from whole history and keeps follow-ups in this thread', (
+    tester,
+  ) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final sent = <SummaryRequest>[];
+    await _open(
+      tester,
+      asking: true,
+      runner: (request, _, _) async {
+        sent.add(request);
+        return _result();
+      },
+    );
+    expect(find.byKey(const ValueKey('summary-scope-hours')), findsNothing);
+    await _tap(tester, 'summary-scope-all');
+    final question = find.descendant(
+      of: find.byKey(const ValueKey('summary-question')),
+      matching: find.byType(TextField),
+    );
+    await tester.ensureVisible(question);
+    await tester.enterText(question, 'When are we meeting?');
+    await _tap(tester, 'summary-generate');
+    expect(sent.single.scope, SummaryScopeKind.all);
+    expect(sent.single.question?.text, 'When are we meeting?');
+    expect(find.text('Ask a follow-up'), findsOneWidget);
+    expect(find.byKey(const ValueKey('summary-scope-messages')), findsNothing);
+    await tester.ensureVisible(question);
+    await tester.enterText(question, 'And where?');
+    await _tap(tester, 'summary-generate');
+    expect(sent.last.question?.previousQuestions, ['When are we meeting?']);
+    expect(sent.last.question?.text, 'And where?');
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _tap(WidgetTester tester, String key) async {
@@ -125,6 +164,7 @@ Future<void> _capture(WidgetTester tester, String name) async {
 }
 
 void main() {
+  _questionTests();
   setUpAll(() async {
     final text = FontLoader('Roboto');
     for (final weight in ['Regular', 'Medium', 'Bold']) {

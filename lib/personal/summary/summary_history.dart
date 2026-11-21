@@ -10,6 +10,7 @@ import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
+import 'package:collection/collection.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -38,7 +39,7 @@ class SummaryHistoryEntry {
 /// this source never marks messages read, sends typing, or requests media.
 abstract interface class SummaryHistorySource {
   Future<void> initialize({required int pageSize});
-  List<SummaryHistoryEntry> get entries;
+  Iterable<SummaryHistoryEntry> get entries;
   bool get hasMore;
   Object get position;
   Future<void> loadOlder({required int pageSize});
@@ -61,21 +62,6 @@ class SummaryHistoryCollector {
   final int maxSourceBytes;
   final Duration pageTimeout;
   static const _pageSize = 100;
-
-  Future<SummarySource> collectRoom({
-    required Room room,
-    required SummaryRequest request,
-    PersonalClient? personal,
-    SummaryCancellation? cancellation,
-    void Function(int loadedMessages)? onProgress,
-    DateTime? now,
-  }) => collect(
-    source: MatrixSummaryHistorySource(room: room, personal: personal),
-    request: request,
-    cancellation: cancellation,
-    onProgress: onProgress,
-    now: now,
-  );
 
   Future<SummarySource> collect({
     required SummaryHistorySource source,
@@ -106,6 +92,8 @@ class SummaryHistoryCollector {
         cancel.throwIfCancelled();
         final seen = <String>{};
         final inScope = <SummaryHistoryEntry>[];
+        var textLength = 0;
+        var readableCount = 0;
         DateTime? oldestLoadedTimestamp;
         // The source's order is the order shown by the conversation, newest
         // first. Server timestamps decide time windows, not the last-N order.
@@ -116,6 +104,15 @@ class SummaryHistoryCollector {
           oldestLoadedTimestamp = entry.timestamp;
           if (lowerBound != null && entry.timestamp.isBefore(lowerBound)) {
             continue;
+          }
+          if (entry.message case final message?) {
+            textLength += message.text.length;
+            readableCount++;
+          }
+          // The final check measures actual UTF-8 JSON. Stop an obviously
+          // oversized range before loading the rest of its history.
+          if (textLength > maxSourceBytes || readableCount > 10000) {
+            throw const SummaryException('source_too_large');
           }
           inScope.add(entry);
           if (request.scope == SummaryScopeKind.messages &&
@@ -157,6 +154,8 @@ class SummaryHistoryCollector {
       }
     } on SummaryException {
       rethrow;
+    } on TimeoutException {
+      throw const SummaryException('history_timeout');
     } catch (_) {
       // Never propagate SDK errors: they can contain room IDs or payloads.
       throw const SummaryException('summary_history_incomplete');
@@ -178,9 +177,11 @@ class SummaryHistoryCollector {
     required SummaryRequest request,
     required bool exhausted,
   }) {
-    final messages =
-        selected.map((e) => e.message).whereType<SummaryMessage>().toList()
-          ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final messages = selected.reversed
+        .map((entry) => entry.message)
+        .whereType<SummaryMessage>()
+        .toList();
+    mergeSort(messages, compare: (a, b) => a.timestamp.compareTo(b.timestamp));
     if (messages.isEmpty) throw const SummaryException('no_messages');
     final omitted = selected.length - messages.length;
     final unreadAttachments = selected.where((e) => e.unreadAttachment).length;
@@ -231,6 +232,110 @@ class SummaryHistoryCollector {
     }
     return result;
   }
+}
+
+/// Shares the merged conversation's chronology and coverage boundary. A
+/// recent-N request can finish only when every source covers its cutoff.
+class MergedSummaryHistorySource implements SummaryHistorySource {
+  MergedSummaryHistorySource(Map<ConversationRef, SummaryHistorySource> sources)
+    : _sources = Map.unmodifiable(sources);
+
+  final Map<ConversationRef, SummaryHistorySource> _sources;
+  List<SummaryHistorySource>? _sourcesToPage;
+
+  @override
+  Future<void> initialize({required int pageSize}) async {
+    await Future.wait(
+      _sources.values.map((source) => source.initialize(pageSize: pageSize)),
+    );
+  }
+
+  @override
+  Iterable<SummaryHistoryEntry> get entries {
+    final buffer = MergedTimelineBuffer<SummaryHistoryEntry>(_sources.keys);
+    final pageable = <(SummaryHistorySource, DateTime?)>[];
+    DateTime? frontier;
+    for (final MapEntry(key: member, value: source) in _sources.entries) {
+      DateTime? oldest;
+      final more = source.hasMore;
+      buffer.addPage(
+        member: member,
+        hasMore: more,
+        // Only the underlying timeline uses the pagination cursor.
+        cursor: more ? 'more' : null,
+        events: source.entries.map((entry) {
+          if (oldest == null || entry.timestamp.isBefore(oldest!)) {
+            oldest = entry.timestamp;
+          }
+          return MergedEvent(
+            source: SourceEventRef(conversation: member, eventId: entry.id),
+            timestamp: entry.timestamp,
+            isOutgoing: false,
+            value: entry,
+          );
+        }),
+      );
+      if (more) {
+        pageable.add((source, oldest));
+        if (oldest != null && (frontier == null || oldest!.isAfter(frontier))) {
+          frontier = oldest;
+        }
+      }
+    }
+    _sourcesToPage = [
+      for (final (source, oldest) in pageable)
+        if (oldest == null || oldest == frontier) source,
+    ];
+    return buffer.coveredEvents.reversed.map((event) {
+      final entry = event.value;
+      return SummaryHistoryEntry(
+        id: event.key,
+        timestamp: entry.timestamp,
+        message: entry.message,
+        omission: entry.omission,
+        unreadAttachment: entry.unreadAttachment,
+      );
+    });
+  }
+
+  @override
+  bool get hasMore => _sources.values.any((source) => source.hasMore);
+
+  @override
+  Object get position => _SummaryPositions([
+    for (final source in _sources.values) source.position,
+  ]);
+
+  @override
+  Future<void> loadOlder({required int pageSize}) async {
+    await Future.wait(
+      (_sourcesToPage ?? _sources.values.where((source) => source.hasMore)).map(
+        (source) => source.loadOlder(pageSize: pageSize),
+      ),
+    );
+    _sourcesToPage = null;
+  }
+
+  @override
+  void dispose() {
+    for (final source in _sources.values) {
+      source.dispose();
+    }
+  }
+}
+
+class _SummaryPositions {
+  const _SummaryPositions(this.positions);
+  final List<Object> positions;
+  static const _equality = ListEquality<Object>();
+
+  @override
+  bool operator ==(Object other) =>
+      other is _SummaryPositions &&
+      _equality.equals(positions, other.positions);
+
+  @override
+  int get hashCode => _equality.hash(positions);
 }
 
 /// Uses existing Matrix decryption and the existing encrypted private store.
@@ -289,11 +394,10 @@ class MatrixSummaryHistorySource implements SummaryHistorySource {
   }
 
   @override
-  List<SummaryHistoryEntry> get entries {
+  Iterable<SummaryHistoryEntry> get entries sync* {
     _checkAccess();
     final timeline = _timeline;
-    if (timeline == null) return const [];
-    final entries = <SummaryHistoryEntry>[];
+    if (timeline == null) return;
     for (final original in timeline.events) {
       final entry = project(
         original,
@@ -304,9 +408,8 @@ class MatrixSummaryHistorySource implements SummaryHistorySource {
         sender: _sender(original),
         transcript: _transcript(original),
       );
-      if (entry != null) entries.add(entry);
+      if (entry != null) yield entry;
     }
-    return entries;
   }
 
   String _sender(Event event) {

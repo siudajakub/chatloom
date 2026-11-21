@@ -4,7 +4,13 @@ import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 
-enum SummaryUiStage { loadingHistory, syncing, waitingWorker, summarizing }
+enum SummaryUiStage {
+  checkingAccess,
+  loadingHistory,
+  syncing,
+  waitingWorker,
+  summarizing,
+}
 
 /// Real progress from history loading and the worker, without invented percent.
 class SummaryUiProgress {
@@ -29,14 +35,18 @@ Future<void> showConversationSummary(
   required SummaryRunner summarize,
   Listenable? accessChanges,
   bool Function()? isCurrent,
+  bool asking = false,
+  String? sourceDescription,
 }) => showNotionSheet<void>(
   context: context,
-  title: 'Conversation summary',
+  title: asking ? 'Ask about conversation' : 'Conversation summary',
   builder: (context) => ConversationSummarySheet(
     chatName: chatName,
     summarize: summarize,
     accessChanges: accessChanges,
     isCurrent: isCurrent,
+    asking: asking,
+    sourceDescription: sourceDescription,
   ),
 );
 
@@ -47,6 +57,8 @@ class ConversationSummarySheet extends StatefulWidget {
   final SummaryRunner summarize;
   final Listenable? accessChanges;
   final bool Function()? isCurrent;
+  final bool asking;
+  final String? sourceDescription;
 
   const ConversationSummarySheet({
     super.key,
@@ -54,6 +66,8 @@ class ConversationSummarySheet extends StatefulWidget {
     required this.summarize,
     this.accessChanges,
     this.isCurrent,
+    this.asking = false,
+    this.sourceDescription,
   });
 
   @override
@@ -63,6 +77,8 @@ class ConversationSummarySheet extends StatefulWidget {
 
 class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
   final _amount = TextEditingController(text: '100');
+  final _question = TextEditingController();
+  final _answers = <(String, SummaryResult)>[];
   final _scroll = ScrollController();
   final _amounts = <SummaryScopeKind, String>{
     SummaryScopeKind.messages: '100',
@@ -115,6 +131,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
     _cancellation?.cancel();
     _cancellation = null;
     _result = null;
+    _answers.clear();
     _view = _SummaryView.options;
     // A lock/account notification can arrive during a frame. Remove this
     // route after it, without popping a different overlay above the sheet.
@@ -137,6 +154,12 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
 
   int? get _number => int.tryParse(_amount.text);
 
+  bool get _canSubmit =>
+      _amountError == null &&
+      (!widget.asking ||
+          (_question.text.trim().isNotEmpty &&
+              _question.text.trim().length <= SummaryQuestion.maxLength));
+
   String? get _amountError {
     if (_scope == SummaryScopeKind.all) return null;
     final number = _number;
@@ -152,6 +175,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
     _generation++;
     _cancellation?.cancel();
     _amount.dispose();
+    _question.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -177,9 +201,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
   }
 
   Future<void> _generate() async {
-    if (!_ensureAccess() ||
-        _view == _SummaryView.running ||
-        _amountError != null) {
+    if (!_ensureAccess() || _view == _SummaryView.running || !_canSubmit) {
       return;
     }
     FocusScope.of(context).unfocus();
@@ -190,6 +212,16 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       amount: _scope == SummaryScopeKind.all ? 1 : _number!,
       detail: _detail,
       language: _language,
+      question: widget.asking
+          ? SummaryQuestion(
+              _question.text.trim(),
+              previousQuestions: _answers.reversed
+                  .take(SummaryQuestion.maxPrevious)
+                  .map((turn) => turn.$1)
+                  .toList()
+                  .reversed,
+            )
+          : null,
     );
     _resetScroll();
     setState(() {
@@ -212,10 +244,23 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       if (!current()) return;
       _resetScroll();
       setState(() {
-        _result = result;
-        _view = _SummaryView.result;
+        if (request.question case final question?) {
+          _answers.add((question.text, result));
+          _question.clear();
+          _view = _SummaryView.options;
+        } else {
+          _result = result;
+          _view = _SummaryView.result;
+        }
         _cancellation = null;
       });
+      if (widget.asking) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (current() && _scroll.hasClients) {
+            _scroll.jumpTo(_scroll.position.maxScrollExtent);
+          }
+        });
+      }
     } catch (error) {
       if (!current()) return;
       _resetScroll();
@@ -239,7 +284,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       _cancellation = null;
       _view = _SummaryView.options;
       _notice =
-          'Summary stopped. A request already started by the service may still have a cost.';
+          'Request stopped. If processing already started, a charge may still apply.';
     });
   }
 
@@ -247,6 +292,16 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
     _resetScroll();
     setState(() {
       _view = _SummaryView.options;
+      _notice = null;
+    });
+  }
+
+  void _newThread() {
+    if (!_ensureAccess()) return;
+    _resetScroll();
+    setState(() {
+      _answers.clear();
+      _question.clear();
       _notice = null;
     });
   }
@@ -294,7 +349,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
                 NotionIconButton(
                   key: const ValueKey('summary-close'),
                   icon: Icons.close,
-                  label: 'Close summary',
+                  label: widget.asking ? 'Close questions' : 'Close summary',
                   onPressed: () => Navigator.of(context).pop(),
                 ),
               ],
@@ -334,6 +389,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       SummaryScopeKind.days => [1, 3, 7, 30],
       SummaryScopeKind.all => <int>[],
     };
+    final hasAnswers = _answers.isNotEmpty;
     return Column(
       key: const ValueKey('summary-options'),
       mainAxisSize: MainAxisSize.min,
@@ -347,123 +403,170 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
               child: Text(_notice!, style: tokens.typography.footnoteMuted),
             ),
           ),
-        Text('What did you miss?', style: tokens.typography.heading),
-        Text(
-          'Choose the part of the conversation you want to catch up on.',
-          style: tokens.typography.calloutMuted,
-        ),
-        _label(context, 'Range'),
-        Wrap(
-          spacing: NotionSpace.xs,
-          runSpacing: NotionSpace.xs,
-          children: [
-            for (final scope in SummaryScopeKind.values)
-              NotionGlassPill(
-                key: ValueKey('summary-scope-${scope.name}'),
-                label: _scopeLabel(scope),
-                selected: _scope == scope,
-                onPressed: () => _chooseScope(scope),
-              ),
-          ],
-        ),
-        const SizedBox(height: NotionSpace.sm),
-        NotionFadeThrough(
-          alignment: Alignment.topCenter,
-          child: _scope == SummaryScopeKind.all
-              ? Text(
-                  'All history imported into this account. Messages from before the bridge import may be unavailable. An incomplete history download must be retried or narrowed.',
-                  key: const ValueKey('summary-entire-history'),
+        if (!widget.asking)
+          Text('What did you miss?', style: tokens.typography.heading),
+        if (hasAnswers)
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _scope == SummaryScopeKind.all
+                      ? 'Whole conversation'
+                      : 'Last $_number messages',
                   style: tokens.typography.footnoteMuted,
-                )
-              : Column(
-                  key: ValueKey('summary-range-${_scope.name}'),
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Wrap(
-                      spacing: NotionSpace.xs,
-                      runSpacing: NotionSpace.xs,
-                      children: [
-                        for (final value in presets)
-                          NotionGlassPill(
-                            key: ValueKey('summary-amount-$value'),
-                            label: '$value',
-                            tooltip:
-                                'Last $value ${_scopeLabel(_scope).toLowerCase()}',
-                            selected: _number == value,
-                            onPressed: () => _chooseAmount(value),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: NotionSpace.sm),
-                    NotionTextField(
-                      key: const ValueKey('summary-custom-amount'),
-                      label: switch (_scope) {
-                        SummaryScopeKind.messages => 'Last messages',
-                        SummaryScopeKind.hours => 'Last hours',
-                        _ => 'Last days',
-                      },
-                      controller: _amount,
-                      keyboardType: TextInputType.number,
-                      textInputAction: TextInputAction.done,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                      error: _amountError,
-                      onChanged: (value) => setState(() {
-                        _amounts[_scope] = value;
-                      }),
-                      onSubmitted: (_) => FocusScope.of(context).unfocus(),
-                    ),
-                  ],
                 ),
-        ),
-        _label(context, 'Detail'),
-        Wrap(
-          spacing: NotionSpace.xs,
-          runSpacing: NotionSpace.xs,
-          children: [
-            for (final detail in SummaryDetail.values)
-              NotionGlassPill(
-                key: ValueKey('summary-detail-${detail.name}'),
-                label: _detailLabel(detail),
-                selected: detail == _detail,
-                onPressed: () => setState(() => _detail = detail),
               ),
+              NotionButton.ghost(
+                label: 'New thread',
+                icon: Icons.add,
+                onPressed: _newThread,
+              ),
+            ],
+          ),
+        if (!hasAnswers) ...[
+          if (widget.sourceDescription case final description?)
+            Text(description, style: tokens.typography.calloutMuted),
+          _label(context, 'Range'),
+          Wrap(
+            spacing: NotionSpace.xs,
+            runSpacing: NotionSpace.xs,
+            children: [
+              for (final scope in SummaryScopeKind.values)
+                if (!widget.asking ||
+                    scope == SummaryScopeKind.messages ||
+                    scope == SummaryScopeKind.all)
+                  NotionGlassPill(
+                    key: ValueKey('summary-scope-${scope.name}'),
+                    label: _scopeLabel(scope),
+                    selected: _scope == scope,
+                    onPressed: () => _chooseScope(scope),
+                  ),
+            ],
+          ),
+          const SizedBox(height: NotionSpace.sm),
+          NotionFadeThrough(
+            alignment: Alignment.topCenter,
+            child: _scope == SummaryScopeKind.all
+                ? Text(
+                    'All history imported into this account. Messages from before the bridge import may be unavailable. An incomplete history download must be retried or narrowed.',
+                    key: const ValueKey('summary-entire-history'),
+                    style: tokens.typography.footnoteMuted,
+                  )
+                : Column(
+                    key: ValueKey('summary-range-${_scope.name}'),
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        spacing: NotionSpace.xs,
+                        runSpacing: NotionSpace.xs,
+                        children: [
+                          for (final value in presets)
+                            NotionGlassPill(
+                              key: ValueKey('summary-amount-$value'),
+                              label: '$value',
+                              tooltip:
+                                  'Last $value ${_scopeLabel(_scope).toLowerCase()}',
+                              selected: _number == value,
+                              onPressed: () => _chooseAmount(value),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: NotionSpace.sm),
+                      NotionTextField(
+                        key: const ValueKey('summary-custom-amount'),
+                        label: switch (_scope) {
+                          SummaryScopeKind.messages => 'Last messages',
+                          SummaryScopeKind.hours => 'Last hours',
+                          _ => 'Last days',
+                        },
+                        controller: _amount,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.done,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
+                        error: _amountError,
+                        onChanged: (value) => setState(() {
+                          _amounts[_scope] = value;
+                        }),
+                        onSubmitted: (_) => FocusScope.of(context).unfocus(),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+        if (widget.asking) ...[
+          for (final (question, answer) in _answers) ...[
+            _label(context, 'You'),
+            SelectableText(question, style: tokens.typography.callout),
+            _label(context, 'Answer'),
+            SummaryReadableText(text: answer.text),
+            const SizedBox(height: NotionSpace.xs),
+            _resultRange(context, answer),
           ],
-        ),
-        const SizedBox(height: NotionSpace.xs),
-        NotionFadeThrough(
-          alignment: AlignmentDirectional.centerStart,
-          child: Text(
-            _detailDescription(_detail),
-            key: ValueKey(_detail),
+          const SizedBox(height: NotionSpace.md),
+          NotionTextField(
+            key: const ValueKey('summary-question'),
+            label: hasAnswers ? 'Ask a follow-up' : 'Your question',
+            controller: _question,
+            minLines: 2,
+            maxLines: 4,
+            textInputAction: TextInputAction.newline,
+            inputFormatters: [
+              LengthLimitingTextInputFormatter(SummaryQuestion.maxLength),
+            ],
+            error: _question.text.trim().length > SummaryQuestion.maxLength
+                ? 'Shorten your question.'
+                : null,
+            onChanged: (_) => setState(() {}),
+          ),
+        ] else ...[
+          _label(context, 'Detail'),
+          Wrap(
+            spacing: NotionSpace.xs,
+            runSpacing: NotionSpace.xs,
+            children: [
+              for (final detail in SummaryDetail.values)
+                NotionGlassPill(
+                  key: ValueKey('summary-detail-${detail.name}'),
+                  label: _detailLabel(detail),
+                  selected: detail == _detail,
+                  onPressed: () => setState(() => _detail = detail),
+                ),
+            ],
+          ),
+          const SizedBox(height: NotionSpace.xs),
+          NotionFadeThrough(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              _detailDescription(_detail),
+              key: ValueKey(_detail),
+              style: tokens.typography.footnoteMuted,
+            ),
+          ),
+          NotionPickerRow<String>(
+            key: const ValueKey('summary-language'),
+            label: 'Summary language',
+            value: _language,
+            options: const [
+              NotionChoice('pl', 'Polish'),
+              NotionChoice('en', 'English'),
+            ],
+            onChanged: (language) {
+              if (_ensureAccess()) setState(() => _language = language);
+            },
+          ),
+        ],
+        const SizedBox(height: NotionSpace.sm),
+        if (!hasAnswers)
+          Text(
+            widget.asking
+                ? 'OpenRouter receives your question, up to four earlier questions, and readable text and transcripts from the selected range. The conversation receives no reply.'
+                : 'OpenRouter receives readable text and available transcripts. Media include their type and caption. Longer ranges cost more.',
+            key: const ValueKey('summary-provider-note'),
             style: tokens.typography.footnoteMuted,
           ),
-        ),
-        NotionPickerRow<String>(
-          key: const ValueKey('summary-language'),
-          label: 'Summary language',
-          value: _language,
-          options: const [
-            NotionChoice('pl', 'Polish'),
-            NotionChoice('en', 'English'),
-          ],
-          onChanged: (language) {
-            if (_ensureAccess()) setState(() => _language = language);
-          },
-        ),
-        const SizedBox(height: NotionSpace.sm),
-        Text(
-          'Gemini 3.1 Flash Lite · OpenRouter',
-          style: tokens.typography.footnote.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: NotionSpace.xxs),
-        Text(
-          'Message text and available transcripts are sent to OpenRouter. Deleted or unreadable messages are omitted. Media include their type and caption; unseen contents are not read. Omissions are reported in the result. Longer ranges cost more. The summary is never posted to the group.',
-          key: const ValueKey('summary-provider-note'),
-          style: tokens.typography.footnoteMuted,
-        ),
       ],
     );
   }
@@ -472,10 +575,18 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
     final tokens = context.notion;
     final stage = _progress.stage;
     final heading = switch (stage) {
+      SummaryUiStage.checkingAccess => 'Checking private sync',
       SummaryUiStage.loadingHistory => 'Loading conversation history',
-      SummaryUiStage.syncing => 'Sending your summary request',
-      SummaryUiStage.waitingWorker => 'Waiting for the summary service',
-      SummaryUiStage.summarizing => 'Writing your summary',
+      SummaryUiStage.syncing =>
+        widget.asking
+            ? 'Sending your question'
+            : 'Sending your summary request',
+      SummaryUiStage.waitingWorker =>
+        widget.asking
+            ? 'Waiting for the private worker'
+            : 'Waiting for the summary service',
+      SummaryUiStage.summarizing =>
+        widget.asking ? 'Writing your answer' : 'Writing your summary',
     };
     return Column(
       key: const ValueKey('summary-working'),
@@ -511,7 +622,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
         const SizedBox(height: NotionSpace.xl),
         Text(
           stage == SummaryUiStage.waitingWorker
-              ? 'Keep this window open. No messages are sent to the group.'
+              ? 'Keep this window open while the worker receives your request.'
               : 'Large conversations can take a little longer.',
           style: tokens.typography.footnoteMuted,
         ),
@@ -529,25 +640,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       children: [
         Text('Your summary', style: tokens.typography.heading),
         const SizedBox(height: NotionSpace.xxs),
-        Text(
-          '${result.messageCount} messages · ${_dateRange(context, result)}',
-          style: tokens.typography.footnoteMuted,
-        ),
-        if (!result.complete || result.coverageNote != null) ...[
-          const SizedBox(height: NotionSpace.sm),
-          NotionCallout(
-            icon: result.complete ? Icons.info_outline : Icons.history_outlined,
-            title: result.complete
-                ? 'About this range'
-                : 'Partial conversation',
-            message:
-                result.coverageNote ??
-                'Some messages were unavailable. This summary only covers the readable history shown above.',
-            tone: result.complete
-                ? NotionCalloutTone.neutral
-                : NotionCalloutTone.warning,
-          ),
-        ],
+        _resultRange(context, result),
         const SizedBox(height: NotionSpace.lg),
         SummaryReadableText(text: result.text),
         const SizedBox(height: NotionSpace.lg),
@@ -566,6 +659,27 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
     );
   }
 
+  Widget _resultRange(BuildContext context, SummaryResult result) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        '${result.messageCount} messages · ${_dateRange(context, result)}',
+        style: context.notion.typography.footnoteMuted,
+      ),
+      if (!result.complete || result.coverageNote != null) ...[
+        const SizedBox(height: NotionSpace.sm),
+        NotionCallout(
+          icon: result.complete ? Icons.info_outline : Icons.history_outlined,
+          title: result.complete ? 'About this range' : 'Partial conversation',
+          message: result.coverageNote ?? 'Some messages were unavailable.',
+          tone: result.complete
+              ? NotionCalloutTone.neutral
+              : NotionCalloutTone.warning,
+        ),
+      ],
+    ],
+  );
+
   Widget _error(BuildContext context) => Column(
     key: const ValueKey('summary-failure'),
     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -574,7 +688,9 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       const SizedBox(height: NotionSpace.lg),
       NotionCallout(
         icon: Icons.error_outline,
-        title: 'Could not create the summary',
+        title: widget.asking
+            ? 'Could not answer'
+            : 'Could not create the summary',
         message: _failure,
         tone: NotionCalloutTone.warning,
       ),
@@ -588,15 +704,17 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Selected text goes to OpenRouter.',
+          widget.asking
+              ? 'Your question and selected text go to OpenRouter.'
+              : 'Selected text goes to OpenRouter.',
           style: context.notion.typography.captionMuted,
         ),
         const SizedBox(height: NotionSpace.xs),
         NotionButton.primary(
           key: const ValueKey('summary-generate'),
-          label: 'Summarize',
+          label: widget.asking ? 'Ask' : 'Summarize',
           expand: true,
-          onPressed: _amountError == null ? _generate : null,
+          onPressed: _canSubmit ? _generate : null,
         ),
       ],
     ),
@@ -632,7 +750,7 @@ class _ConversationSummarySheetState extends State<ConversationSummarySheet> {
       children: [
         NotionButton.ghost(
           key: const ValueKey('summary-edit'),
-          label: 'Change range',
+          label: widget.asking ? 'Back to questions' : 'Change range',
           onPressed: _edit,
         ),
         if (_retryAllowed)
@@ -741,41 +859,51 @@ String summaryFailureMessage(Object error) {
   return switch (code) {
     'history_incomplete' || 'incomplete_history' || 'partial_history' =>
       'The complete range could not be read. Choose fewer messages or a shorter time range and try again.',
-    'source_timeout' =>
+    'history_timeout' =>
       'Loading the conversation took too long. Choose a shorter range and try again.',
+    'source_timeout' =>
+      'The private worker did not receive every part of the request. Check private sync and try again.',
     'input_too_large' || 'source_too_large' || 'request_too_large' =>
-      'This range is too large for one summary. Choose fewer messages or a shorter time range.',
+      'This range is too large for one request. Choose fewer messages or a shorter time range.',
     'no_messages' || 'empty_source' =>
       'There are no readable messages in this range. Choose a different range.',
-    'disappearing_messages' || 'disappearing_room' =>
-      'Disappearing conversations are not sent for summarization.',
+    'disappearing_messages' ||
+    'disappearing_room' => 'Disappearing conversations are excluded.',
     'worker_unavailable' || 'worker_offline' || 'worker_timeout' =>
       'The summary service is unavailable. Check the connection and try again later.',
     'timeout' || 'paid_request_unknown' =>
-      'The service has not confirmed a result. The request may still be running and may have a cost. Check the connection before starting another summary.',
+      'The service did not confirm a result. The request may still be running and may have a cost. Check the connection before you try again.',
     'locked' =>
       'Unlock the app, then open the conversation again to create a summary.',
     'account_unavailable' =>
       'This conversation is no longer available on the current account. Open it again before creating a summary.',
     'private_sync_required' || 'storage_unavailable' =>
       'Connect private sync in Advanced settings to use conversation summaries.',
-    'not_configured' || 'provider_unavailable' || 'missing_api_key' =>
-      'Summarization is not configured on the service yet. Try again after the service has been updated.',
+    'not_configured' ||
+    'missing_api_key' => 'The private worker needs summary configuration.',
+    'provider_unavailable' =>
+      'OpenRouter has no eligible provider right now. Try again later.',
+    'device_not_approved' =>
+      'Approve this device in Private sync before starting a request.',
+    'questions_not_supported' =>
+      'Update the private worker to ask questions about this conversation.',
     'rate_limited' => 'The service is busy. Wait a moment, then try again.',
     'budget_exceeded' || 'cost_limit' =>
       'This summary exceeds the service’s cost limit. Choose a shorter range.',
     'auth_failed' || 'payment_required' =>
       'The summary service cannot access OpenRouter. Its provider access or balance needs attention before retrying.',
     'invalid_response' || 'output_incomplete' || 'model_mismatch' =>
-      'The service did not return a complete summary. Try again or choose a shorter range.',
+      'The service returned an incomplete result. Try again or choose a shorter range.',
+    'filtered' =>
+      'The provider filtered the response. Choose a different range.',
     'rejected' =>
-      'The provider could not summarize this selection. Change the range and try again.',
+      'The provider rejected this request. Change the range and try again.',
     'invalid_request' ||
     'invalid_source' ||
     'invalid_summary_request' ||
     'invalid_summary_source' =>
       'This selection could not be prepared. Change the range and try again.',
-    'cancelled' => 'The summary was stopped. You can try again.',
+    'cancelled' => 'The request was stopped. You can try again.',
     _ =>
       'The summary could not be completed. Try again or choose a shorter range.',
   };

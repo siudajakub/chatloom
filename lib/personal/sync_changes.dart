@@ -227,9 +227,11 @@ String syncEntityTitle(
 }) {
   final kind = operation?.kind ?? '';
   if (kind.startsWith('summary.') || entity.startsWith('summary:')) {
-    return kind == 'summary.cancel'
-        ? 'Stop a conversation summary'
-        : 'Conversation summary';
+    return switch (kind) {
+      'summary.cancel' => 'Stop a conversation summary',
+      'summary.question' => 'Conversation question',
+      _ => 'Conversation summary',
+    };
   }
   if (kind.startsWith('transcript.')) {
     final payload = operation!.payload;

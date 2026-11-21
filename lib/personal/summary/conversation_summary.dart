@@ -11,58 +11,114 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
-/// Starts only from the explicitly selected group. No conversation event,
-/// receipt, typing signal or provider credential is published here.
-Future<void> showGroupConversationSummary(
+bool canUseConversationAssistant(Room room) =>
+    room.membership == Membership.join &&
+    !room.isArchived &&
+    !room.isSpace &&
+    !PersonalPrivacy.isJournal(room);
+
+/// Starts from a single explicit Matrix conversation.
+Future<void> showConversationAssistant(
   BuildContext context, {
   required Room room,
   required bool Function() isCurrent,
+  bool asking = false,
+}) {
+  if (!asking && room.isDirectChatForDisplay) return Future.value();
+  return _showConversationAssistant(
+    context,
+    rooms: [room],
+    chatName: InboxProjection(PersonalClient.of(room.client)).displayName(room),
+    isCurrent: isCurrent,
+    asking: asking,
+  );
+}
+
+/// One read-only request over the active sources shown for a merged person.
+Future<void> showMergedConversationAssistant(
+  BuildContext context, {
+  required List<Room> rooms,
+  required int linkedRoomCount,
+  required String chatName,
+  required bool Function() isCurrent,
+  required bool asking,
+}) => _showConversationAssistant(
+  context,
+  rooms: List.unmodifiable(rooms),
+  linkedRoomCount: linkedRoomCount,
+  chatName: chatName,
+  isCurrent: isCurrent,
+  asking: asking,
+);
+
+Future<void> _showConversationAssistant(
+  BuildContext context, {
+  required List<Room> rooms,
+  required String chatName,
+  required bool Function() isCurrent,
+  required bool asking,
+  int? linkedRoomCount,
 }) async {
-  if (room.isDirectChatForDisplay ||
-      room.membership != Membership.join ||
-      room.isArchived ||
-      PersonalPrivacy.isJournal(room) ||
-      !PersonalPrivacy.surfaceUnlocked ||
-      !isCurrent()) {
-    return;
-  }
+  if (rooms.isEmpty) return;
+  final room = rooms.first;
   final personal = PersonalClient.of(room.client);
   final account = room.client.userID;
   final lockGeneration = PersonalPrivacy.surfaceLockGeneration;
+  final sourceDescription = linkedRoomCount == null
+      ? null
+      : linkedRoomCount == rooms.length
+      ? 'Includes all ${rooms.length} linked chats.'
+      : 'Includes ${rooms.length} of $linkedRoomCount linked chats currently available.';
   bool current() =>
       context.mounted &&
       isCurrent() &&
       PersonalPrivacy.surfaceUnlocked &&
       lockGeneration == PersonalPrivacy.surfaceLockGeneration &&
       account == room.client.userID &&
-      identical(room.client.getRoomById(room.id), room) &&
-      room.membership == Membership.join &&
-      !room.isArchived;
+      rooms.every(
+        (source) =>
+            identical(source.client, personal.client) &&
+            identical(source.client.getRoomById(source.id), source) &&
+            canUseConversationAssistant(source),
+      );
+  if (account == null || !current()) return;
 
-  final journal = SummaryJournal(personal: personal, isCurrent: current);
+  bool hasDisappearingMessages() => rooms.any(roomMayDisappear);
+  final journal = SummaryJournal(
+    personal: personal,
+    isCurrent: () => current() && !hasDisappearingMessages(),
+  );
   await showConversationSummary(
     context,
-    chatName: InboxProjection(personal).displayName(room),
+    chatName: chatName,
+    sourceDescription: sourceDescription,
+    asking: asking,
     isCurrent: current,
     accessChanges: Listenable.merge([personal, AppLock.of(context).controller]),
     summarize: (request, onProgress, cancellation) async {
       cancellation.throwIfCancelled();
       if (!current()) throw const SummaryCancelledException();
-      onProgress(const SummaryUiProgress(stage: SummaryUiStage.syncing));
+      onProgress(const SummaryUiProgress(stage: SummaryUiStage.checkingAccess));
       await personal.load();
       cancellation.throwIfCancelled();
-      journal.validate();
-      await loadRoomState(room);
+      await Future.wait(rooms.map(loadRoomState));
       cancellation.throwIfCancelled();
-      journal.validate();
-      if (roomMayDisappear(room)) {
+      if (hasDisappearingMessages()) {
         throw const SummaryException('disappearing_messages');
       }
+      journal.validate(asking: asking);
       onProgress(const SummaryUiProgress(stage: SummaryUiStage.loadingHistory));
-      final source = await const SummaryHistoryCollector().collectRoom(
-        room: room,
+      final history = await const SummaryHistoryCollector().collect(
+        source: rooms.length == 1
+            ? MatrixSummaryHistorySource(room: room, personal: personal)
+            : MergedSummaryHistorySource({
+                for (final source in rooms)
+                  personal.ref(source): MatrixSummaryHistorySource(
+                    room: source,
+                    personal: personal,
+                  ),
+              }),
         request: request,
-        personal: personal,
         cancellation: cancellation,
         onProgress: (count) {
           if (!current()) {
@@ -78,14 +134,26 @@ Future<void> showGroupConversationSummary(
         },
       );
       cancellation.throwIfCancelled();
-      journal.validate();
+      final source = sourceDescription == null
+          ? history
+          : SummarySource(
+              messages: history.messages,
+              complete: history.complete && linkedRoomCount == rooms.length,
+              omittedMessages: history.omittedMessages,
+              coverageNote: [
+                sourceDescription,
+                ?history.coverageNote,
+              ].join(' '),
+            );
       onProgress(
         SummaryUiProgress(
-          stage: SummaryUiStage.waitingWorker,
+          stage: SummaryUiStage.syncing,
           messageCount: source.messages.length,
         ),
       );
       return journal.generate(
+        // Only an account-bound anchor for the journal's existing manifest.
+        // The context already contains the validated source projection.
         conversation: personal.ref(room),
         request: request,
         source: source,

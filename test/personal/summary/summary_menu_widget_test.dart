@@ -90,6 +90,10 @@ void main() {
     final personal = await mount(tester, direct: true);
     expect(find.text('Summarize conversation'), findsNothing);
     expect(find.text('Search conversation'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('menu-summary.ask')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('summary-question')), findsOneWidget);
+    expect(personal.pending, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
     personal.dispose();
     expect(tester.takeException(), isNull);

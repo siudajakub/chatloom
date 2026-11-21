@@ -609,13 +609,11 @@ class RoomPersonalButton extends StatelessWidget {
     alignEnd: true,
     entries: () {
       final p = PersonalClient.of(room.client);
+      final canUseAssistant = canUseConversationAssistant(room);
       return conversationQuickActions(
         editing: isEditing?.call() == true,
-        canSummarize:
-            !room.isDirectChatForDisplay &&
-            room.membership == Membership.join &&
-            !room.isArchived &&
-            !PersonalPrivacy.isJournal(room),
+        canSummarize: canUseAssistant && !room.isDirectChatForDisplay,
+        canAsk: canUseAssistant,
         mute: room.membership == Membership.join
             ? conversationMuteState(
                 context,
@@ -652,10 +650,11 @@ class RoomPersonalButton extends StatelessWidget {
       );
       return;
     }
-    if (kind == 'summary') {
-      await showGroupConversationSummary(
+    if (kind == 'summary' || kind == 'summary.ask') {
+      await showConversationAssistant(
         context,
         room: room,
+        asking: kind == 'summary.ask',
         isCurrent: () =>
             context.mounted &&
             isCurrentSource?.call() != false &&
@@ -794,6 +793,7 @@ List<NotionMenuEntry<String>> conversationQuickActions({
   bool editing = false,
   bool merged = false,
   bool canSummarize = false,
+  bool canAsk = false,
   ConversationMuteState? mute,
 }) => [
   const NotionMenuEntry(
@@ -808,6 +808,13 @@ List<NotionMenuEntry<String>> conversationQuickActions({
       value: 'summary',
       label: 'Summarize conversation',
       icon: Icons.summarize_outlined,
+    ),
+  if (canAsk)
+    const NotionMenuEntry(
+      key: ValueKey('menu-summary.ask'),
+      value: 'summary.ask',
+      label: 'Ask about conversation',
+      icon: Icons.question_answer_outlined,
     ),
   NotionMenuEntry(
     key: const ValueKey('menu-schedule'),

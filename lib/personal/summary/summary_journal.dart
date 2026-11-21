@@ -15,10 +15,10 @@ class SummaryJournal {
   const SummaryJournal({
     required this.personal,
     required this.isCurrent,
-    this.timeout = const Duration(minutes: 3),
+    this.timeout = const Duration(minutes: 5),
   });
 
-  void validate() {
+  void validate({bool asking = false}) {
     if (!isCurrent()) throw const SummaryCancelledException();
     if (!personal.ready) throw const SummaryException('private_sync_required');
     final heartbeat = personal.workerReadiness;
@@ -28,8 +28,14 @@ class SummaryJournal {
     if (heartbeat.healthy != true || heartbeat.verified != true) {
       throw const SummaryException('worker_unavailable');
     }
+    if (personal.workerIgnoresThisDevice) {
+      throw const SummaryException('summary_device_not_approved');
+    }
     if (heartbeat.summary != 'ready' || heartbeat.summaryVersion != 1) {
       throw const SummaryException('summary_not_configured');
+    }
+    if (asking && (heartbeat.summaryQuestions ?? 0) < 1) {
+      throw const SummaryException('summary_questions_not_supported');
     }
   }
 
@@ -41,7 +47,8 @@ class SummaryJournal {
     void Function(bool processing)? onState,
   }) async {
     cancellation.throwIfCancelled();
-    validate();
+    final asking = request.question != null;
+    validate(asking: asking);
     final id = 'summary:${const Uuid().v4()}';
     final upload = SummaryUpload.create(
       id: id,
@@ -54,24 +61,23 @@ class SummaryJournal {
     try {
       for (var i = 0; i < upload.parts.length; i++) {
         cancellation.throwIfCancelled();
-        validate();
+        validate(asking: asking);
         final entity = upload.partEntity(i);
         await personal.put(entity, upload.parts[i]);
         stagedParts.add(entity);
       }
       cancellation.throwIfCancelled();
-      validate();
+      validate(asking: asking);
       // Freeze the commitment before awaiting storage: cancellation that
       // races publication must be recorded durably, not drop a local future.
       requested = true;
       await personal.command(
-        'summary.request',
+        asking ? 'summary.question' : 'summary.request',
         id,
         upload.manifest,
-        optimisticJob: {...upload.manifest, 'state': 'waitingSync'},
+        optimisticJob: {'id': id, 'state': 'waitingSync'},
       );
       cancellation.throwIfCancelled();
-      validate();
       return await _wait(id, cancellation, onState);
     } catch (_) {
       if (requested) {
@@ -106,7 +112,12 @@ class SummaryJournal {
       if (done.isCompleted) return;
       try {
         cancellation.throwIfCancelled();
-        validate();
+        // A stale heartbeat or temporary disconnect does not invalidate a
+        // committed request or an authenticated result arriving on reconnect.
+        if (!isCurrent()) throw const SummaryCancelledException();
+        if (personal.workerIgnoresThisDevice) {
+          throw const SummaryException('summary_device_not_approved');
+        }
         final job = personal.summaries[id];
         if (job == null) return;
         switch (job['state']) {

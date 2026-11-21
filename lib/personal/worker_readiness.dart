@@ -50,6 +50,7 @@ class WorkerReadiness {
   /// Optional private conversation-summary service.
   final String? summary;
   final int? summaryVersion;
+  final int? summaryQuestions;
 
   /// Own device ids whose journal commands the worker ignores as untrusted
   /// (not pinned, not verified or blocked); empty for older workers.
@@ -73,6 +74,7 @@ class WorkerReadiness {
     this.dictationVersion,
     this.summary,
     this.summaryVersion,
+    this.summaryQuestions,
     this.untrustedDevices = const [],
   });
 
@@ -123,6 +125,7 @@ class WorkerReadiness {
       dictationVersion: count(payload['dictationVersion']),
       summary: allowed(payload['summary'], {'ready', 'not_configured'}),
       summaryVersion: count(payload['summaryVersion']),
+      summaryQuestions: count(payload['summaryQuestions']),
       untrustedDevices: switch (payload['untrustedDevices']) {
         final List<Object?> ids => List.unmodifiable(
           ids.whereType<String>().where((id) => id.length <= 255).take(64),
@@ -157,6 +160,7 @@ class WorkerReadiness {
       other.dictationVersion == dictationVersion &&
       other.summary == summary &&
       other.summaryVersion == summaryVersion &&
+      other.summaryQuestions == summaryQuestions &&
       _sameList(other.untrustedDevices, untrustedDevices);
 
   static bool _sameList(List<String> a, List<String> b) {
@@ -183,6 +187,7 @@ class WorkerReadiness {
     metadataResync,
     Object.hash(dictation, dictationVersion, summary, deviceApproval),
     summaryVersion,
+    summaryQuestions,
     Object.hashAll(untrustedDevices),
   );
 
