@@ -41,6 +41,11 @@ class AudioPlayerWidget extends StatefulWidget {
   /// with the following voice notes (Telegram). Null: no continuation.
   final Iterable<Event> Function()? continuationHistory;
 
+  /// A deleted voice note kept on this device ("Keep deleted messages"):
+  /// plays, but never marks it listened on the network, never transcribes
+  /// (nothing reaches the worker) and has no full-screen stage.
+  final bool kept;
+
   static const int wavesCount = 40;
 
   const AudioPlayerWidget(
@@ -49,6 +54,7 @@ class AudioPlayerWidget extends StatefulWidget {
     required this.linkColor,
     required this.fontSize,
     this.continuationHistory,
+    this.kept = false,
     super.key,
   });
 
@@ -707,7 +713,7 @@ class AudioPlayerState extends State<AudioPlayerWidget>
               audioPlayer,
               Duration(milliseconds: (duration * value).round()),
             ),
-      onExpand: expanded ? null : _openStage,
+      onExpand: expanded || widget.kept ? null : _openStage,
       onDownload: () => widget.event.saveFile(context),
       speed: audioPlayer?.speed ?? matrix.voiceSpeed,
       onSpeed: audioPlayer == null || _starting
@@ -734,10 +740,12 @@ class AudioPlayerState extends State<AudioPlayerWidget>
                 ),
               ),
             ),
-            MarkListenedButton(event: widget.event, color: widget.color),
+            if (!widget.kept)
+              MarkListenedButton(event: widget.event, color: widget.color),
           ],
         ),
-        TranscriptPanel(event: widget.event, foregroundColor: widget.color),
+        if (!widget.kept)
+          TranscriptPanel(event: widget.event, foregroundColor: widget.color),
         if (fileDescription != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),

@@ -2,6 +2,7 @@
 import 'dart:typed_data';
 
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/events/audio_player.dart';
 import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/ui/notion/notion.dart';
@@ -12,7 +13,9 @@ import 'package:matrix/matrix.dart';
 
 /// A deleted message whose content "Keep deleted messages" kept: its text
 /// (for media, the label and a thumbnail that is still in the local cache)
-/// dimmed, with a "Deleted" chip. A tap says when it was deleted. Nothing
+/// dimmed, with a "Deleted" chip. A tap says when it was deleted. A kept
+/// voice note gets a player: it uses the local media store and fetches the
+/// kept attachment reference only when the user presses play. Nothing else
 /// here downloads, decodes HTML or loads link previews.
 class KeptMessageContent extends StatelessWidget {
   final KeptMessage kept;
@@ -57,6 +60,45 @@ class KeptMessageContent extends StatelessWidget {
           )
         : personalPreviewLabel(copy, i18n: MatrixLocals(l10n));
     final color = textColor.withValues(alpha: dimmed);
+    if (copy.type == EventTypes.Message &&
+        copy.messageType == MessageTypes.Audio) {
+      return Padding(
+        padding: NotionBubble.textLine,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: NotionBubble.mediaMaxWidth,
+              ),
+              child: AudioPlayerWidget(
+                copy,
+                color: color,
+                linkColor: color,
+                fontSize: fontSize,
+                kept: true,
+              ),
+            ),
+            const SizedBox(height: NotionSpace.xxs),
+            Semantics(
+              button: true,
+              hint: l10n.deletedAtTime(
+                kept.deletedAt.localizedDetailedTime(context),
+              ),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => showKeptMessageInfo(context, kept),
+                child: KeptDeletedChip(
+                  label: l10n.keptDeletedLabel,
+                  color: color,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Semantics(
       button: true,
       hint: l10n.deletedAtTime(kept.deletedAt.localizedDetailedTime(context)),

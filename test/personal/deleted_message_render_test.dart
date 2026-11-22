@@ -4,6 +4,7 @@
 // copies (Keep deleted messages). Fictional offline fixtures only.
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
+import 'package:chatloom/pages/chat/events/audio_player.dart';
 import 'package:chatloom/pages/chat/events/deleted_message.dart';
 import 'package:chatloom/pages/chat/events/kept_message.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
@@ -12,6 +13,7 @@ import 'package:chatloom/pages/chat/events/reply_content.dart';
 import 'package:chatloom/pages/chat/message_deletion.dart';
 import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/kept_messages.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/matrix.dart';
 import 'package:flutter/services.dart';
@@ -149,10 +151,16 @@ void main() {
       'msgtype': 'm.text',
       'body': '* secret edit',
       'm.new_content': {'msgtype': 'm.text', 'body': 'secret edit'},
-      'm.relates_to': {'rel_type': RelationshipTypes.edit, 'event_id': r'$gone'},
+      'm.relates_to': {
+        'rel_type': RelationshipTypes.edit,
+        'event_id': r'$gone',
+      },
     });
     final timeline = timelineOf([edit, reaction, deleted]);
-    expect(deleted.hasAggregatedEvents(timeline, RelationshipTypes.reaction), isTrue);
+    expect(
+      deleted.hasAggregatedEvents(timeline, RelationshipTypes.reaction),
+      isTrue,
+    );
     await tester.pumpWidget(app(message(deleted, timeline)));
     await tester.pumpAndSettle();
     expect(find.text('Message deleted'), findsOneWidget);
@@ -258,5 +266,61 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Deleted at'), findsOneWidget);
     expect(find.textContaining('Kept on this device only'), findsOneWidget);
+  });
+
+  testWidgets('a kept voice note gets a player, no transcript or listened', (
+    tester,
+  ) async {
+    final storage = _MemoryStorage();
+    final kept = KeptMessages.instance;
+    final previousStorage = kept.storageFor;
+    final previousOptions = kept.optionsFor;
+    kept
+      ..storageFor = ((_) => storage)
+      ..optionsFor = () => const KeepDeletedOptions(enabled: true);
+    addTearDown(() {
+      kept
+        ..storageFor = previousStorage
+        ..optionsFor = previousOptions;
+    });
+    final original = room.message(
+      r'$voice',
+      'voice',
+      content: {
+        'msgtype': MessageTypes.Audio,
+        'body': 'Voice message.ogg',
+        'url': 'mxc://example.invalid/voice',
+        'info': {'mimetype': 'audio/ogg', 'duration': 4000, 'size': 1000},
+        'org.matrix.msc3245.voice': <String, Object?>{},
+      },
+    );
+    final redaction = Event(
+      room: room,
+      eventId: r'$redaction',
+      senderId: _anna,
+      type: EventTypes.Redaction,
+      originServerTs: DateTime.utc(2026, 10, 16, 16, 50),
+      content: {'redacts': r'$voice'},
+      redacts: r'$voice',
+    );
+    await tester.runAsync(
+      () => kept.capture(
+        RedactionCapture(room: room, redaction: redaction, original: original),
+      ),
+    );
+    expect(storage.records, hasLength(1));
+    original.setRedactionEvent(redaction);
+    final timeline = timelineOf([original]);
+    await tester.pumpWidget(app(message(original, timeline)));
+    await tester.pumpAndSettle();
+    expect(find.byType(KeptMessageContent), findsOneWidget);
+    final player = tester.widget<AudioPlayerWidget>(
+      find.byType(AudioPlayerWidget),
+    );
+    expect(player.kept, isTrue);
+    expect(player.event.redacted, isFalse);
+    expect(find.byType(MarkListenedButton), findsNothing);
+    expect(find.byType(TranscriptPanel), findsNothing);
+    expect(find.text('Deleted'), findsOneWidget);
   });
 }
