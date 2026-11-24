@@ -214,14 +214,33 @@ class AvatarCache {
       uri,
       isThumbnail ? 'avatar:$side' : 'avatar:original',
     );
-    final bytes = await cache.fetch(key, download);
+    // A bridge may stop serving an old profile photo even though another
+    // screen already cached a thumbnail at a different pixel density.
+    Future<Uint8List> fetch() async {
+      try {
+        return await cache.fetch(key, download);
+      } on MatrixException catch (error) {
+        if (!isThumbnail || error.response?.statusCode != 404) rethrow;
+        for (final bucket in buckets.reversed.where((b) => b != side)) {
+          checkCurrent();
+          final cached = await cache.read(
+            StickerMediaCache.keyFor(account, uri, 'avatar:$bucket'),
+          );
+          checkCurrent();
+          if (cached != null && looksLikeImage(cached)) return cached;
+        }
+        rethrow;
+      }
+    }
+
+    final bytes = await fetch();
     checkCurrent();
     if (!isThumbnail || looksLikeImage(bytes)) return bytes;
     // Undecodable bytes stored by an older build would otherwise be served
     // for 120 days and every retry would show the same broken avatar.
     await cache.remove(key);
     checkCurrent();
-    return cache.fetch(key, download);
+    return fetch();
   }
 
   /// Signature check for formats the platform decoders handle. Bytes that

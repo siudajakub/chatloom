@@ -56,9 +56,8 @@ class NotionScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.notion;
-    // A list page scrolls under a glass header (DESIGN.md "Glass"); a custom
-    // [body] keeps the opaque header and is laid out below it.
-    final glassHeader = body == null;
+    // Lists scroll under the header. Custom bodies handle their own insets.
+    final scrollUnderHeader = body == null;
     final content =
         body ??
         Builder(
@@ -88,12 +87,17 @@ class NotionScaffold extends StatelessWidget {
           ),
         );
     return Scaffold(
-      extendBodyBehindAppBar: glassHeader,
+      extendBodyBehindAppBar: scrollUnderHeader,
       appBar: AppBar(
         toolbarHeight: NotionSize.headerHeight,
         automaticallyImplyLeading: false,
-        backgroundColor: glassHeader ? Colors.transparent : null,
-        flexibleSpace: glassHeader ? const NotionGlassBar() : null,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        flexibleSpace: NotionGlassBar(
+          tint: scrollUnderHeader ? null : tokens.glass.dockTint,
+          hairlineBottom: !scrollUnderHeader,
+        ),
         leading: onBack == null
             ? null
             // The press motion of `NotionIconButton` (UI-20), like the

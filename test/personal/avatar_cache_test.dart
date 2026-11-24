@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:chatloom/personal/media/avatar_cache.dart';
+import 'package:chatloom/personal/stickers/sticker_media_cache.dart';
 import 'package:chatloom/utils/client_download_content_extension.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -41,6 +43,43 @@ void main() {
     expect(AvatarCache.bucketFor(120 * 3), 640);
     expect(AvatarCache.bucketFor(5000), 640);
   });
+
+  test(
+    'expired bridge photo uses another thumbnail for the same account',
+    () async {
+      final directory = await Directory.systemTemp.createTemp('avatar-bucket');
+      addTearDown(() => directory.delete(recursive: true));
+      final cache = await StickerMediaCache.open(
+        Directory('${await directory.resolveSymbolicLinks()}/cache'),
+        key: List.filled(32, 1),
+      );
+      AvatarCache.debugSetShared(cache);
+      final uri = Uri.parse('mxc://example.invalid/expired');
+      const owner = '@fixture:example.invalid';
+      await cache.write(
+        StickerMediaCache.keyFor(owner, uri, 'avatar:256'),
+        Uint8List.fromList(_png),
+      );
+      final client = _MediaClient(
+        MockClient(
+          (_) async =>
+              http.Response('{"errcode":"M_NOT_FOUND","error":"Expired"}', 404),
+        ),
+      )..setUserId(owner);
+      Future<Uint8List> thumbnail() => AvatarCache.loadAvatar(
+        client,
+        uri,
+        width: 40,
+        height: 40,
+        isThumbnail: true,
+        animated: false,
+        thumbnailMethod: ThumbnailMethod.crop,
+      );
+      expect(await thumbnail(), _png);
+      client.setUserId('@other:example.invalid');
+      await expectLater(thumbnail(), throwsA(isA<MatrixException>()));
+    },
+  );
 
   for (final status in [404]) {
     test('thumbnail $status still loads the bridge original', () async {
