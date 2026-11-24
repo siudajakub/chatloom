@@ -97,6 +97,7 @@ abstract class BoundedAudioLoader {
     Cancellation cancel, {
     required int maxBytes,
     required bool requireDeclaredSize,
+    bool manual = false,
   });
 }
 

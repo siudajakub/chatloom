@@ -143,10 +143,7 @@ void main() {
   late WorkerEngine engine;
   var now = DateTime.utc(2026, 10, 17, 12);
 
-  WorkerEngine build({
-    bool auto = true,
-    int concurrency = 2,
-  }) => WorkerEngine(
+  WorkerEngine build({bool auto = true, int concurrency = 2}) => WorkerEngine(
     store,
     transport,
     transcriber,
@@ -265,91 +262,78 @@ void main() {
     },
   );
 
-  test(
-    'shared reels are never transcribed, even with a stale reel policy',
-    () async {
-      // J (2026-11-18): no automatic and no on-demand transcription of
-      // Instagram/Facebook shares, whatever an older client synced.
-      putPolicy(
-        const TranscriptionPolicy().withKind(AutoTranscriptionKind.reel, true),
-      );
-      store.setCheckpoint(WorkerEngine.autoScanCheckpoint, '1');
-      scanner.pages.add(
-        RecentSourcePage(2, [
-          // A reel reported anyway (an older adapter) creates no job.
-          item(
-            r'$reel',
-            kind: AutoTranscriptionKind.reel,
-            network: 'instagram',
-          ),
-          item(r'$voice', network: 'instagram'),
-          item(
-            r'$round',
-            kind: AutoTranscriptionKind.round,
-            network: 'instagram',
-          ),
-        ]),
-      );
-      expect(await engine.autoScan(force: true), 2);
-      expect(store.job(entity(r'$reel')), isNull);
-      await runJobs();
-      expect(store.job(entity(r'$voice'))!['state'], 'done');
-      expect(store.job(entity(r'$round'))!['state'], 'done');
+  test('shared reels are manual only, even with a stale reel policy', () async {
+    // J (2026-11-18): no automatic and no on-demand transcription of
+    // Instagram/Facebook shares, whatever an older client synced.
+    putPolicy(
+      const TranscriptionPolicy().withKind(AutoTranscriptionKind.reel, true),
+    );
+    store.setCheckpoint(WorkerEngine.autoScanCheckpoint, '1');
+    scanner.pages.add(
+      RecentSourcePage(2, [
+        // A reel reported anyway (an older adapter) creates no job.
+        item(r'$reel', kind: AutoTranscriptionKind.reel, network: 'instagram'),
+        item(r'$voice', network: 'instagram'),
+        item(
+          r'$round',
+          kind: AutoTranscriptionKind.round,
+          network: 'instagram',
+        ),
+      ]),
+    );
+    expect(await engine.autoScan(force: true), 2);
+    expect(store.job(entity(r'$reel')), isNull);
+    await runJobs();
+    expect(store.job(entity(r'$voice'))!['state'], 'done');
+    expect(store.job(entity(r'$round'))!['state'], 'done');
 
-      // A client asks (automatic or manual); preflight identifies the reel
-      // before download and nothing is loaded or paid for.
-      final source = SourceEventRef(
-        conversation: const ConversationRef(accountId: account, roomId: room),
-        eventId: r'$client-reel',
-      );
-      final id = transcriptEntityId(source);
-      transport.facts[source.eventId] = const MediaFacts(
-        kind: AutoTranscriptionKind.reel,
-        sizeBytes: 3,
-      );
-      void request(
-        String opId,
-        TranscriptionOrigin origin, {
-        int revision = 0,
-      }) {
-        engine.accept(
-          op(
-            opId,
-            'transcript.request',
-            id,
-            Map<String, dynamic>.from(
-              TranscriptionJob(
-                id: id,
-                source: source,
-                state: JobState.queued,
-                origin: origin,
-              ).toJson(),
-            ),
-            revision: revision,
+    // A client asks (automatic or manual); preflight identifies the reel
+    // before download and nothing is loaded or paid for.
+    final source = SourceEventRef(
+      conversation: const ConversationRef(accountId: account, roomId: room),
+      eventId: r'$client-reel',
+    );
+    final id = transcriptEntityId(source);
+    transport.facts[source.eventId] = const MediaFacts(
+      kind: AutoTranscriptionKind.reel,
+      sizeBytes: 3,
+    );
+    void request(String opId, TranscriptionOrigin origin, {int revision = 0}) {
+      engine.accept(
+        op(
+          opId,
+          'transcript.request',
+          id,
+          Map<String, dynamic>.from(
+            TranscriptionJob(
+              id: id,
+              source: source,
+              state: JobState.queued,
+              origin: origin,
+            ).toJson(),
           ),
-        );
-      }
+          revision: revision,
+        ),
+      );
+    }
 
-      request('client-auto', TranscriptionOrigin.auto);
-      await runJobs();
-      expect(store.job(id)!['errorCode'], 'auto_skipped_kind');
-      expect(transport.loads, isNot(contains(source.eventId)));
+    request('client-auto', TranscriptionOrigin.auto);
+    await runJobs();
+    expect(store.job(id)!['errorCode'], 'auto_skipped_kind');
+    expect(transport.loads, isNot(contains(source.eventId)));
 
-      // A job persisted by an older worker as a reel stops after restart,
-      // manual or automatic, even without fresh media facts.
-      final persisted = store.job(id)!
-        ..['state'] = 'queued'
-        ..['origin'] = 'manual'
-        ..remove('errorCode');
-      store.saveJob(persisted);
-      transport.facts[source.eventId] = null;
-      engine = build();
-      await runJobs();
-      expect(store.job(id)!['state'], 'failed');
-      expect(store.job(id)!['errorCode'], 'not_audio');
-      expect(transport.loads, isNot(contains(source.eventId)));
-    },
-  );
+    // Restarting a manually requested reel still processes it.
+    final persisted = store.job(id)!
+      ..['state'] = 'queued'
+      ..['origin'] = 'manual'
+      ..remove('errorCode');
+    store.saveJob(persisted);
+    transport.facts[source.eventId] = null;
+    engine = build();
+    await runJobs();
+    expect(store.job(id)!['state'], 'done');
+    expect(transport.loads, contains(source.eventId));
+  });
 
   test('scan interval, busy source and failures keep the cursor', () async {
     store.setCheckpoint(WorkerEngine.autoScanCheckpoint, '7');

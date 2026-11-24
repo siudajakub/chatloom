@@ -29,8 +29,7 @@ class WorkerConfig {
   final bool autoTranscriptionMatrix;
 
   /// Former operator permission for automatic shared reels. Still parsed so
-  /// existing configs load, but ignored: since 2026-11-18 shared reels are
-  /// never transcribed, whatever this says.
+  /// existing configs load. Shared reels can only be requested manually.
   final bool autoTranscriptionReels;
 
   /// The provider and speech model (`transcriptionProvider` and

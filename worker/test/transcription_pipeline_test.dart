@@ -52,6 +52,7 @@ class _Transport
     Cancellation cancel, {
     required int maxBytes,
     required bool requireDeclaredSize,
+    bool manual = false,
   }) async {
     bounds.add((source.eventId, maxBytes, requireDeclaredSize));
     inFlight++;

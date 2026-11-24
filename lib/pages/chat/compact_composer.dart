@@ -742,7 +742,7 @@ class _ComposerActionStrip extends StatelessWidget {
               child: FadeTransition(
                 opacity: progress,
                 child: Padding(
-                  padding: const EdgeInsets.only(bottom: NotionSpace.xxs),
+                  padding: const EdgeInsets.symmetric(vertical: NotionSpace.xs),
                   child: child,
                 ),
               ),

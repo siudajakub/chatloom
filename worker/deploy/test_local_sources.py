@@ -714,7 +714,7 @@ class LocalReelPolicyTests(unittest.TestCase):
                 self.assertEqual(sources.exportable_media(reel_message(), kinds=kinds), (None, None))
         self.assertEqual(sources.exportable_media(video_message(), kinds=('reel',)), (None, None))
 
-    def test_selected_reel_is_not_transcribable(self):
+    def test_selected_reel_is_manual_only(self):
         with tempfile.TemporaryDirectory() as directory:
             index = Path(directory) / 'index.db'
             canonical = reel_message()
@@ -733,7 +733,9 @@ class LocalReelPolicyTests(unittest.TestCase):
             with patch.object(sources, 'INDEX', index), patch.object(sources, 'BeeperAPI') as client:
                 client.return_value.request.side_effect = api
                 _, attachment = sources.selected_source(source)
-            self.assertIsNone(attachment)
+                self.assertIsNone(attachment)
+                _, manual = sources.selected_source(source, manual=True)
+                self.assertEqual(manual['_kind'], 'reel')
 
 
 class LocalRecentTests(unittest.TestCase):

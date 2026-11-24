@@ -319,6 +319,7 @@ class MatrixFeatureTransport
     Cancellation cancel, {
     required int maxBytes,
     required bool requireDeclaredSize,
+    bool manual = false,
   }) async {
     final selected = await room(source.conversation);
     cancel.check();
@@ -346,6 +347,7 @@ class MatrixFeatureTransport
       event,
       maxBytes: maxBytes,
       requireDeclaredSize: requireDeclaredSize,
+      manual: manual,
     );
     if (rejection != null) throw WorkerFailure(rejection);
     // The chat's setting, also for a room the worker never loaded.
@@ -379,6 +381,7 @@ class MatrixFeatureTransport
     // send bytes to the decoder/provider after the source becomes unavailable.
     final afterDownload = transcriptionSourceRejection(
       event,
+      manual: manual,
       maxBytes: maxBytes,
     );
     if (afterDownload != null) throw WorkerFailure(afterDownload);
@@ -429,6 +432,7 @@ class MatrixFeatureTransport
     Event event, {
     int maxBytes = transcriptionSourceMaxBytes,
     bool requireDeclaredSize = false,
+    bool manual = false,
   }) {
     if (event.redacted) return 'source_redacted';
     if (event.type != EventTypes.Message) return 'not_audio';
@@ -442,7 +446,9 @@ class MatrixFeatureTransport
     final round = RoundVideoDescriptor.fromContent(event.content);
     final policy = RoundMediaPolicy.fromContent(event.content);
     if (!policy.canTranscribe) return 'protected_media';
-    if (transcribableMediaKind(event.content) == null) return 'not_audio';
+    if (transcribableMediaKind(event.content, manual: manual) == null) {
+      return 'not_audio';
+    }
     // The chat's disappearing-message setting (mautrix bridgev2 room state);
     // fail closed on anything but an explicit "off".
     if (disappearingTimerLimits(
@@ -668,7 +674,9 @@ class MatrixDictationSource implements PrivateDictationSource {
     if (event.type == EventTypes.Encrypted) return 'waiting_keys';
     if (event.redacted) return 'source_redacted';
     if (!RoundMediaPolicy.fromContent(event.content).canTranscribe ||
-        disappearingTimerLimits(event.room.getState(beeperDisappearingTimerKey)?.content)) {
+        disappearingTimerLimits(
+          event.room.getState(beeperDisappearingTimerKey)?.content,
+        )) {
       return 'protected_media';
     }
     final info = event.infoMap;

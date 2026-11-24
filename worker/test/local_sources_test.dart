@@ -307,35 +307,47 @@ void main() {
     ]);
   });
 
-  test('a reel flagged by an older adapter is never exported', () async {
-    for (final metadata in [
-      {'kind': 'video', 'reel': true},
-      {'kind': 'reel'},
-    ]) {
-      final fixture = await FixtureSource.start(
-        (_) => {
-          'sourceKey': source.key,
-          'redacted': false,
-          'transcriptionAllowed': true,
-          'mimeType': 'video/mp4',
-          ...metadata,
-          'durationMs': 30000,
-          'fileSize': 900000,
-        },
-      );
-      final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
-      expect(
-        (await transport.mediaFacts(source))!.kind,
-        AutoTranscriptionKind.reel,
-      );
-      await expectLater(
-        transport.loadAudio(source, Cancellation()),
-        throwsA(
-          isA<WorkerFailure>().having((e) => e.code, 'code', 'not_audio'),
-        ),
-      );
-    }
-  });
+  test(
+    'a reel flagged by an older adapter requires a manual request',
+    () async {
+      for (final metadata in [
+        {'kind': 'video', 'reel': true},
+        {'kind': 'reel'},
+      ]) {
+        final fixture = await FixtureSource.start(
+          (_) => {
+            'sourceKey': source.key,
+            'redacted': false,
+            'transcriptionAllowed': true,
+            'mimeType': 'video/mp4',
+            ...metadata,
+            'durationMs': 30000,
+            'fileSize': 900000,
+          },
+        );
+        final transport = LocalSourceTransport(NoMatrix(), fixture.socket);
+        expect(
+          (await transport.mediaFacts(source))!.kind,
+          AutoTranscriptionKind.reel,
+        );
+        await expectLater(
+          transport.loadAudio(source, Cancellation()),
+          throwsA(
+            isA<WorkerFailure>().having((e) => e.code, 'code', 'not_audio'),
+          ),
+        );
+        final result = await transport.loadAudioBounded(
+          source,
+          Cancellation(),
+          maxBytes: localAudioMaxBytes,
+          requireDeclaredSize: false,
+          manual: true,
+        );
+        expect(result.mimeType, 'video/mp4');
+        expect(fixture.requests.last['manual'], isTrue);
+      }
+    },
+  );
 
   test('kind changing between checks fails closed', () async {
     var calls = 0;

@@ -131,17 +131,21 @@ class NotionChatDetailsPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 18),
                   Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 12,
+                    spacing: NotionSpace.xs,
+                    runSpacing: NotionSpace.xs,
                     children: [
-                      NotionPressable(
-                        enabled: actions.search != null,
-                        child: TextButton.icon(
+                      if (actions.search != null)
+                        NotionGlassPill(
+                          icon: Icons.search_outlined,
+                          label: 'Search messages',
                           onPressed: actions.search,
-                          icon: const Icon(Icons.search_outlined, size: 22),
-                          label: const Text('Search messages'),
                         ),
-                      ),
+                      if (actions.contact != null)
+                        NotionGlassPill(
+                          icon: Icons.person_outline,
+                          label: 'View contact',
+                          onPressed: actions.contact,
+                        ),
                     ],
                   ),
                   NotionSizeReveal(
@@ -173,7 +177,7 @@ class NotionChatDetailsPage extends StatelessWidget {
                         : null,
                   ),
                   if (data.sharedContent != null) data.sharedContent!,
-                  const NotionDetailsSection(title: 'Conversation'),
+                  const NotionDetailsSection(title: 'Appearance'),
                   NotionPropertyRow(
                     label: 'Nickname',
                     value: Text(
@@ -185,6 +189,17 @@ class NotionChatDetailsPage extends StatelessWidget {
                   Text(
                     'Your nickname is private.',
                     style: TextStyle(fontSize: 12, color: secondary),
+                  ),
+                  NotionListRow(
+                    leading: const Icon(Icons.palette_outlined),
+                    title: 'Colours & avatar',
+                    subtitle: actions.appearance == null
+                        ? 'Connect private sync to edit'
+                        : null,
+                    onTap: pending ? null : actions.appearance,
+                  ),
+                  const NotionDetailsSection(
+                    title: 'Notifications & visibility',
                   ),
                   // One row per page: for a single chat, Notifications opens
                   // the same page as the visibility rules, so the adapter
@@ -250,6 +265,7 @@ class NotionChatDetailsPage extends StatelessWidget {
                           'network.',
                       trailing: NotionValueTag(data.disappearing!),
                     ),
+                  const NotionDetailsSection(title: 'Inbox'),
                   NotionListRow(
                     leading: const Icon(Icons.push_pin_outlined),
                     title: 'Pin chat',
@@ -263,35 +279,6 @@ class NotionChatDetailsPage extends StatelessWidget {
                       onChanged: pending ? null : actions.pin,
                     ),
                   ),
-                  NotionListRow(
-                    leading: const Icon(Icons.visibility_off_outlined),
-                    title: 'Incognito',
-                    subtitle: 'For all chats on this device',
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        NotionFadeThrough(
-                          alignment: AlignmentDirectional.centerEnd,
-                          child: NotionValueTag(
-                            data.incognito ? 'On' : 'Off',
-                            key: ValueKey(data.incognito),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.chevron_right, size: 22),
-                      ],
-                    ),
-                    onTap: actions.privacy,
-                  ),
-                  NotionListRow(
-                    leading: const Icon(Icons.palette_outlined),
-                    title: 'Colours & avatar',
-                    subtitle: actions.appearance == null
-                        ? 'Connect private sync to edit'
-                        : null,
-                    onTap: pending ? null : actions.appearance,
-                  ),
-                  const NotionDetailsSection(),
                   NotionListRow(
                     key: const ValueKey('details-archive'),
                     leading: Icon(
@@ -307,16 +294,32 @@ class NotionChatDetailsPage extends StatelessWidget {
                         : 'Private archive · keeps your history',
                     onTap: pending ? null : actions.archive,
                   ),
-                  // A group's people are under Participants (FX-09).
-                  if (actions.contact != null)
-                    NotionListRow(
-                      leading: const Icon(Icons.person_outline),
-                      title: 'View contact',
-                      onTap: actions.contact,
-                    ),
                   if (data.sourceRows.isNotEmpty) ...[
                     const NotionDetailsSection(title: 'Network & security'),
                     ...data.sourceRows,
+                  ],
+                  if (actions.privacy != null) ...[
+                    const NotionDetailsSection(title: 'Device settings'),
+                    NotionListRow(
+                      leading: const Icon(Icons.visibility_off_outlined),
+                      title: 'Incognito',
+                      subtitle: 'For all chats on this device',
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          NotionFadeThrough(
+                            alignment: AlignmentDirectional.centerEnd,
+                            child: NotionValueTag(
+                              data.incognito ? 'On' : 'Off',
+                              key: ValueKey(data.incognito),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.chevron_right, size: 22),
+                        ],
+                      ),
+                      onTap: actions.privacy,
+                    ),
                   ],
                 ]),
               ),

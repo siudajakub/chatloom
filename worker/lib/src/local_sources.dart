@@ -25,7 +25,7 @@ const localVideoMimeTypes = {
 
 /// Kinds this worker asks the adapter for. Adapters that predate video
 /// support ignore the field and keep returning voice/round only. Shared
-/// reels are never asked for nor exported (J, 2026-11-18); a current adapter
+/// reels are never requested by the scanner; a current adapter
 /// never lists them as `video` either.
 const localRecentKinds = ['voice', 'round', 'video', 'audio'];
 const localReelKind = 'reel';
@@ -207,6 +207,7 @@ class LocalSourceTransport
     Cancellation cancel, {
     int? limit,
     Duration? wait,
+    bool manual = false,
   }) async {
     if (!verified ||
         source.conversation.accountId != accountId ||
@@ -216,7 +217,7 @@ class LocalSourceTransport
     return _exclusive(
       () => _send(
         '/source',
-        {'source': source.toJson(), 'mode': mode},
+        {'source': source.toJson(), 'mode': mode, if (manual) 'manual': true},
         limit ?? (mode == 'metadata' ? _metadataMaxBytes : localAudioMaxBytes),
         cancel,
       ),
@@ -227,12 +228,19 @@ class LocalSourceTransport
   Future<Map<String, dynamic>> metadata(
     SourceEventRef source,
     Cancellation cancel, {
+    bool manual = false,
     Duration? wait,
   }) async {
     final data =
         jsonDecode(
               utf8.decode(
-                await request(source, 'metadata', cancel, wait: wait),
+                await request(
+                  source,
+                  'metadata',
+                  cancel,
+                  wait: wait,
+                  manual: manual,
+                ),
               ),
             )
             as Map<String, dynamic>;
@@ -261,11 +269,13 @@ class LocalSourceTransport
   /// Media kind and byte bound approved by fresh adapter metadata. Voice notes
   /// and other audio must be audio; round videos must be exactly video/mp4;
   /// other videos one of [localVideoMimeTypes].
-  static int _exportLimit(Map<String, dynamic> metadata) {
+  static int _exportLimit(
+    Map<String, dynamic> metadata, {
+    required bool manual,
+  }) {
     final mime = metadata['mimeType'];
     final kind = metadata['kind'] ?? 'voice';
-    // A shared reel is never transcribed (J, 2026-11-18).
-    if (kind == localReelKind || metadata['reel'] == true) {
+    if (!manual && (kind == localReelKind || metadata['reel'] == true)) {
       throw const WorkerFailure('not_audio');
     }
     if (mime is! String) throw const WorkerFailure('protected_media');
@@ -273,7 +283,8 @@ class LocalSourceTransport
       return localAudioMaxBytes;
     }
     if (kind == 'round' && mime == 'video/mp4') return localRoundMaxBytes;
-    if (kind == 'video' && localVideoMimeTypes.contains(mime)) {
+    if ((kind == 'video' || kind == localReelKind) &&
+        localVideoMimeTypes.contains(mime)) {
       return localAudioMaxBytes;
     }
     if (mime.startsWith('video/')) {
@@ -301,7 +312,6 @@ class LocalSourceTransport
         ? AutoTranscriptionKind.reel
         : kind;
   }
-
 
   @override
   Future<MediaFacts?> mediaFacts(SourceEventRef source) async {
@@ -345,6 +355,7 @@ class LocalSourceTransport
     Cancellation cancel, {
     required int maxBytes,
     required bool requireDeclaredSize,
+    bool manual = false,
   }) async {
     if (!local(source)) {
       final Object matrix = this.matrix;
@@ -354,10 +365,11 @@ class LocalSourceTransport
               cancel,
               maxBytes: maxBytes,
               requireDeclaredSize: requireDeclaredSize,
+              manual: manual,
             )
           : this.matrix.loadAudio(source, cancel);
     }
-    final before = await metadata(source, cancel);
+    final before = await metadata(source, cancel, manual: manual);
     if (before['redacted'] == true) {
       throw const WorkerFailure('source_redacted');
     }
@@ -372,18 +384,24 @@ class LocalSourceTransport
     if (declared is! int && requireDeclaredSize) {
       throw const WorkerFailure('auto_skipped_unknown_size');
     }
-    final kindLimit = _exportLimit(before);
+    final kindLimit = _exportLimit(before, manual: manual);
     // The adapter response is refused above this before buffering (declared
     // Content-Length) and aborted while streaming.
     final limit = kindLimit < maxBytes ? kindLimit : maxBytes;
     // Wire mode stays 'audio' for compatibility; it means "approved media
     // bytes". The transcriber keeps only the first audio stream.
-    final bytes = await request(source, 'audio', cancel, limit: limit);
-    final after = await metadata(source, cancel);
+    final bytes = await request(
+      source,
+      'audio',
+      cancel,
+      limit: limit,
+      manual: manual,
+    );
+    final after = await metadata(source, cancel, manual: manual);
     if (after['redacted'] == true) throw const WorkerFailure('source_redacted');
     if (after['transcriptionAllowed'] != true ||
         after['mimeType'] != before['mimeType'] ||
-        (after['kind'] ?? 'voice') != (before['kind'] ?? 'voice')) {
+        _metadataKind(after) != _metadataKind(before)) {
       throw const WorkerFailure('protected_media');
     }
     return AudioSource(bytes, before['mimeType'] as String);

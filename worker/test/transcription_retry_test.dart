@@ -54,6 +54,7 @@ class _Transport
     Cancellation cancel, {
     required int maxBytes,
     required bool requireDeclaredSize,
+    bool manual = false,
   }) => loadAudio(source, cancel);
   @override
   Future<AudioSource> loadAudio(

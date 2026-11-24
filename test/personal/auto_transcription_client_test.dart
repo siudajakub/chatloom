@@ -576,9 +576,8 @@ void main() {
   });
 
   test(
-    'Instagram reels are never transcribed, automatically or on demand',
+    'Instagram reels require an explicit request and a compatible worker',
     () async {
-      // J (2026-11-18), superseding on-demand reels (2026-10-20).
       final shared = reel(cloud, r'$reel');
       expect(PersonalClient.autoTranscriptionKind(shared), isNull);
       personal.workerReadiness = heartbeat('scan', media: 3);
@@ -599,6 +598,15 @@ void main() {
           (op) => op.entityId == personal.transcriptId(shared),
         ),
         isEmpty,
+      );
+      personal.workerReadiness = heartbeat('scan', media: 4);
+      expect(personal.transcribableKind(shared), AutoTranscriptionKind.reel);
+      await personal.transcribe(shared);
+      expect(
+        personal.requests.where(
+          (op) => op.entityId == personal.transcriptId(shared),
+        ),
+        hasLength(1),
       );
       // Other Instagram videos keep the video policy.
       expect(personal.autoTranscriptPending(video(cloud, r'$clip')), isTrue);
@@ -637,7 +645,7 @@ void main() {
           reason: url,
         );
         expect(personal.autoTranscriptPending(shared), isFalse, reason: url);
-        // Not offered on demand either.
+        // An older worker cannot serve manual requests.
         expect(personal.transcribableKind(shared), isNull);
       }
       await flushTimers();
@@ -1224,8 +1232,8 @@ void main() {
       expect(find.text('Other'), findsOneWidget);
     });
 
-    testWidgets('shared reels have no switch and say they are never '
-        'transcribed', (tester) async {
+    testWidgets('shared reels have no switch and explain the '
+        'long-press action', (tester) async {
       final personal = await fakeZonePersonal();
       personal.workerReadiness = heartbeat('scan', media: 3);
       await mount(
@@ -1237,12 +1245,7 @@ void main() {
         findsNothing,
       );
       expect(find.text('Shared reels'), findsNothing);
-      expect(
-        find.textContaining(
-          'shared from Instagram or Facebook are never transcribed',
-        ),
-        findsOneWidget,
-      );
+      expect(find.textContaining('press and hold its message'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('transcription-kind-video')),
         findsOneWidget,

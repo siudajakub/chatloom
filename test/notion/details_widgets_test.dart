@@ -31,10 +31,13 @@ void main() {
       expect(find.text('Visibility'), findsNothing);
       expect(find.text('Chat rules'), findsNothing);
       // The only switch is the private pin control.
+      await tester.scrollUntilVisible(find.text('Pin chat'), -180);
       expect(find.byType(Switch), findsOneWidget);
+      await tester.scrollUntilVisible(find.text('Incognito'), 180);
+      await tester.ensureVisible(find.text('Incognito'));
       await tester.tap(find.text('Incognito'));
       expect(privacy, 1);
-      expect(find.text('Mentions only'), findsOneWidget);
+      expect(find.text('Device settings'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

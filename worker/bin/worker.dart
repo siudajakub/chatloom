@@ -340,9 +340,9 @@ Future<void> main(List<String> arguments) async {
                 'autoTranscription': engine.autoScanActive ? 'scan' : 'off',
                 // Worker capabilities for app-side gating: media kinds 2 =
                 // voice, round, any video and audio (also as files); 3 = also
-                // shared reels told apart and never transcribed;
+                // shared reels distinguished; 4 = on-demand shared reels;
                 // live = cloud rooms are picked up from the worker's own sync.
-                'transcriptionMedia': 3,
+                'transcriptionMedia': 4,
                 'autoTranscriptionLive': engine.liveScanActive,
                 // Answers `metadata.resync` (state of merged persons again).
                 'metadataResync': 1,

@@ -43,10 +43,8 @@ ROUND_SQUARE_TOLERANCE = 2
 # Media kinds. `video` and `audio` are only listed by /recent when the
 # worker asks for them (`kinds`), so a worker that predates them never
 # receives an item kind it would refuse as an invalid page. A video shared
-# from Instagram or Facebook (a reel, post or story) is never transcribed,
-# automatically or on demand (J, 2026-11-18, superseding on-demand reels of
-# 2026-10-20): it is never listed and never exported, whatever the worker
-# asks. `reel` stays accepted in `kinds` so a worker that still asks for it
+# from Instagram or Facebook is exported only for a manual selection.
+# The recent-media scan always excludes shares. `reel` stays accepted in `kinds` so a worker that still asks for it
 # keeps scanning; it simply matches nothing.
 KINDS = ('voice', 'round', 'video', 'audio', 'reel')
 LEGACY_KINDS = ('voice', 'round')
@@ -444,7 +442,7 @@ def ordinary_round(message, telegram=False):
     return attachment
 
 
-def exportable_media(message, telegram=False, kinds=KINDS):
+def exportable_media(message, telegram=False, kinds=KINDS, manual=False):
     """(attachment, kind) for exportable speech media, else (None, None).
 
     Rounds are classified before other videos, voice notes before other audio."""
@@ -458,7 +456,7 @@ def exportable_media(message, telegram=False, kinds=KINDS):
         video = ordinary_video(message)
         if video is not None:
             if instagram_share(message):
-                return None, None
+                return (video, 'reel') if manual and 'reel' in kinds else (None, None)
             return (video, 'video') if 'video' in kinds else (None, None)
     if 'audio' in kinds:
         audio = ordinary_audio(message)
@@ -474,7 +472,7 @@ def _declared_duration(attachment):
     return duration if duration is not None and duration >= 0 else None
 
 
-def selected_source(source):
+def selected_source(source, manual=False):
     conversation = source['conversation']
     room, event = conversation['roomId'], source['eventId']
     if not room.startswith('!') or not room.endswith(':beeper.local') or not event.startswith('$'):
@@ -510,7 +508,7 @@ def selected_source(source):
         if candidate is not None and round_flag(canonical, candidate) is None:
             pending = candidate
     if original is None and pending is None:
-        original, kind = exportable_media(canonical, telegram, ('video', 'audio'))
+        original, kind = exportable_media(canonical, telegram, ('video', 'audio', 'reel'), manual=manual)
     # The public message API omits some behavior/timer fields. The canonical
     # stored model must approve export before the API is used to resolve bytes.
     if rows[0][2] or (original is None and pending is None):
@@ -521,7 +519,7 @@ def selected_source(source):
         raise SourceFailure()
     if kind == 'voice':
         attachment = ordinary_voice(message)
-    elif kind == 'video':
+    elif kind in ('video', 'reel'):
         attachment = ordinary_video(message)
     elif kind == 'audio':
         attachment = ordinary_audio(message)
@@ -539,8 +537,8 @@ def selected_source(source):
             # Not a round after all: an ordinary video, if the canonical
             # model allows that on its own (every restriction applies).
             video = ordinary_video(canonical)
-            if video is not None and not instagram_share(canonical):
-                original, kind = video, 'video'
+            if video is not None and (manual or not instagram_share(canonical)):
+                original, kind = video, 'reel' if instagram_share(canonical) else 'video'
                 attachment = ordinary_video(message)
     if attachment is not None:
         if any(attachment.get(k) != original.get(k) for k in ('id', 'mimeType', 'fileSize')):
@@ -674,7 +672,8 @@ class Handler(BaseHTTPRequestHandler):
             mode = request['mode']
             if mode not in ('metadata', 'audio'):
                 raise SourceFailure()
-            message, attachment = selected_source(source)
+            manual = request.get('manual') is True
+            message, attachment = selected_source(source, manual=manual)
             if mode == 'metadata':
                 self.reply(200, json.dumps({'sourceKey': json.dumps([
                     source['conversation']['accountId'], source['conversation']['roomId'], source['eventId']],
@@ -693,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             file = audio_file(attachment)
             # Fresh source policy after download; never export deleted/limited media.
-            _, after = selected_source(source)
+            _, after = selected_source(source, manual=manual)
             if after is None or any(after.get(k) != attachment.get(k) for k in ('id', 'mimeType', 'fileSize', '_kind')):
                 raise SourceFailure()
             limit = ROUND_MAX_BYTES if attachment.get('_kind') == 'round' else MAX_BYTES

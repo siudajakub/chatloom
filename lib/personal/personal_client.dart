@@ -1621,7 +1621,13 @@ class PersonalClient extends ChangeNotifier {
   /// Speech media that may be sent for transcription (voice notes, other
   /// audio, rounds, videos, media files; see `transcribableMediaKind`);
   /// null for anything else, including protected media and silent loops.
-  static AutoTranscriptionKind? autoTranscriptionKind(Event e) {
+  static AutoTranscriptionKind? autoTranscriptionKind(Event e) =>
+      _transcriptionKind(e, manual: false);
+
+  static AutoTranscriptionKind? _transcriptionKind(
+    Event e, {
+    required bool manual,
+  }) {
     if (e.redacted ||
         e.content.containsKey(DictationLimits.sourceMarker) ||
         PersonalPrivacy.isJournal(e.room) ||
@@ -1629,7 +1635,7 @@ class PersonalClient extends ChangeNotifier {
         !e.eventId.startsWith(r'$')) {
       return null;
     }
-    return transcribableMediaKind(e.content);
+    return transcribableMediaKind(e.content, manual: manual);
   }
 
   /// True when the worker transcribes every video and media file
@@ -1641,7 +1647,10 @@ class PersonalClient extends ChangeNotifier {
   /// The kind of [e] the paired worker can transcribe, or null. Panels use
   /// it to decide whether to offer transcription at all.
   AutoTranscriptionKind? transcribableKind(Event e) {
-    final kind = autoTranscriptionKind(e);
+    final kind = _transcriptionKind(e, manual: true);
+    if (kind == AutoTranscriptionKind.reel) {
+      return (workerReadiness?.transcriptionMedia ?? 0) >= 4 ? kind : null;
+    }
     if (kind == null || workerTranscribesAllMedia) return kind;
     return switch (kind) {
       AutoTranscriptionKind.voice || AutoTranscriptionKind.round => kind,
@@ -1878,7 +1887,11 @@ class PersonalClient extends ChangeNotifier {
         e.content.containsKey(DictationLimits.sourceMarker) ||
         PersonalPrivacy.isJournal(e.room) ||
         !e.eventId.startsWith(r'$') ||
-        transcribableKind(e) == null ||
+        roomMayDisappear(e.room) ||
+        (origin == TranscriptionOrigin.manual
+                ? transcribableKind(e)
+                : autoTranscriptionKind(e)) ==
+            null ||
         (round != null &&
             (await TelegramRoundService.of(client).mediaState(e))?['expired'] ==
                 true)) {

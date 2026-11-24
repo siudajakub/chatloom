@@ -6,8 +6,7 @@ import 'package:personal_core/personal_core.dart' show isMetaShare;
 
 /// A reel, post or story shared from Instagram or Facebook: the bridge's
 /// own video (share metadata or link caption) or media loaded from a shared
-/// link. Never transcribed (J, 2026-11-18); played full screen without
-/// caption, link footer or transcript.
+/// link. Shared reels use the full-screen vertical player.
 bool isSharedReel(Event event) =>
     event is InstagramMediaAsset ||
     (!event.redacted && isMetaShare(event.content));

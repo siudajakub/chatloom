@@ -99,7 +99,7 @@ Notifications → Push setup & registration** and tap retry.
 **Incognito.** New installs start in Incognito. Turn it off in **Settings →
 Privacy**.
 
-**Transcription.** Tap *Transcribe* on a voice message. Automatic transcription
+**Transcription.** Tap *Transcribe* on a voice message. To transcribe a shared Instagram or Facebook video attachment, hold the message and choose *Transcribe*. Reopen the same menu to read its transcript. Automatic transcription
 of incoming voice and round messages is in **Settings → Sync & transcriptions**.
 Only your worker sends the audio to OpenAI, using your own API key.
 Disappearing messages are never transcribed.

@@ -18,6 +18,7 @@ import 'package:chatloom/personal/bridge_notices.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/personal/deleted_messages.dart';
 import 'package:chatloom/personal/delivery_ticks.dart';
+import 'package:chatloom/personal/disappearing_state.dart';
 import 'package:chatloom/personal/encryption/undecryptable_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/instagram_share.dart';
@@ -27,6 +28,7 @@ import 'package:chatloom/personal/media/gallery_content.dart';
 import 'package:chatloom/personal/message_delivery.dart';
 import 'package:chatloom/personal/message_preview.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/transcript_panel.dart';
 import 'package:chatloom/personal/ui/bridge_notice_line.dart';
 import 'package:chatloom/personal/ui/call_history_card.dart';
 import 'package:chatloom/personal/ui/notion_network_filter.dart';
@@ -691,6 +693,48 @@ class Message extends StatelessWidget {
     );
   }
 
+  Future<void> _openTranscript(
+    BuildContext context,
+    PersonalClient personal,
+    Event event,
+  ) async {
+    try {
+      await personal.loadLocal();
+      if (!context.mounted || event.redacted || roomMayDisappear(event.room)) {
+        return;
+      }
+      if (personal.transcripts[personal.transcriptId(event)] == null) {
+        await personal.transcribe(
+          event,
+          language: personal.transcriptionDefaultLanguage,
+        );
+      }
+      if (!context.mounted) return;
+      await showNotionSheet<void>(
+        context: context,
+        title: Localizations.localeOf(context).languageCode == 'pl'
+            ? 'Transkrypcja'
+            : 'Transcript',
+        builder: (_) => SingleChildScrollView(
+          padding: NotionSpace.sheet,
+          child: TranscriptPanel(event: event),
+        ),
+      );
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              Localizations.localeOf(context).languageCode == 'pl'
+                  ? 'Nie udało się otworzyć transkrypcji.'
+                  : 'Could not open the transcript.',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   /// The long-press menu: quick reactions of this network (when it takes
   /// reactions here) above the lifted bubble, the host's actions below.
   void _openMenu(
@@ -707,6 +751,7 @@ class Message extends StatelessWidget {
         ? ConversationMessageActions.quickReactions(event.room)
         : const <String>[];
     final own = ConversationMessageActions.ownReactionKeys(event, timeline);
+    final personal = PersonalClient.of(event.room.client);
     showConversationMessageMenu(
       context: context,
       press: press,
@@ -733,7 +778,20 @@ class Message extends StatelessWidget {
           : null,
       actions: press.reactionsOnly
           ? const []
-          : menuActions?.call(event) ?? const [],
+          : [
+              if (kept == null &&
+                  menuActions != null &&
+                  !roomMayDisappear(event.room) &&
+                  personal.transcribableKind(event) != null)
+                ConversationMessageAction(
+                  icon: Icons.transcribe_outlined,
+                  label: Localizations.localeOf(context).languageCode == 'pl'
+                      ? 'Transkrypcja'
+                      : 'Transcribe',
+                  onSelected: () => _openTranscript(context, personal, event),
+                ),
+              ...?menuActions?.call(event),
+            ],
       caption: kept == null
           ? event.originServerTs.localizedDetailedTime(context)
           : '${event.originServerTs.localizedDetailedTime(context)} · '

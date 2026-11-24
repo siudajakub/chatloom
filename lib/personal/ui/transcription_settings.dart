@@ -32,7 +32,7 @@ const transcriptionKindLabels = <AutoTranscriptionKind, (String, String)>{
     'Only the audio track is sent; clips without sound are skipped',
   ),
   AutoTranscriptionKind.audio: ('Other audio', 'Audio files and recordings'),
-  // No switch for shared reels: J (2026-11-18) never wants them transcribed.
+  // No switch for shared reels: they can only be transcribed on request.
 };
 
 /// Subtitle of a per-kind switch.
@@ -172,7 +172,7 @@ class TranscriptionSettingsSection extends StatelessWidget {
           title: 'Transcribe automatically',
           subtitle:
               'Voice messages, round videos and videos are transcribed on the server as soon as they arrive or you send them; only their audio is sent to OpenAI. Disappearing messages are never sent; muted and ignored chats are skipped.'
-              ' Reels, posts and stories shared from Instagram or Facebook are never transcribed.'
+              ' To transcribe a shared Instagram or Facebook video, press and hold its message.'
               '${policy.auto && !personal.autoTranscriptionAvailable ? ' Currently off on the background service: tap Transcribe on a message instead.' : ''}',
           value: policy.auto,
           onChanged: editable

@@ -803,11 +803,12 @@ class _NotionLiveChatDetailsState extends State<NotionLiveChatDetails> {
             subtitle: 'Visible to everyone on the network',
             onTap: widget.controller?.setAvatarAction,
           ),
-        NotionListRow(
-          leading: const Icon(Icons.people_outline),
-          title: 'Participants',
-          onTap: () => context.push('/rooms/${room.id}/details/members'),
-        ),
+        if (!room.isDirectChatForDisplay)
+          NotionListRow(
+            leading: const Icon(Icons.people_outline),
+            title: 'Participants',
+            onTap: () => context.push('/rooms/${room.id}/details/members'),
+          ),
         ?_hiddenMessagesRow([room]),
         const Divider(),
         ..._networkRows(room, name),

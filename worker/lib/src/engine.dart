@@ -1308,14 +1308,8 @@ class WorkerEngine {
         _setState(job, 'cancelled', 'auto_disabled');
         return;
       }
-      // Shared reels are never transcribed (J, 2026-11-18), not even on
-      // request; a job queued by an older worker or client stops here.
-      if (_jobKind(job) == AutoTranscriptionKind.reel) {
-        _setState(
-          job,
-          automatic ? 'cancelled' : 'failed',
-          automatic ? 'auto_skipped_kind' : 'not_audio',
-        );
+      if (automatic && _jobKind(job) == AutoTranscriptionKind.reel) {
+        _setState(job, 'cancelled', 'auto_skipped_kind');
         return;
       }
       _cancellations[id] = cancel;
@@ -1385,6 +1379,7 @@ class WorkerEngine {
                 cancel,
                 maxBytes: cap,
                 requireDeclaredSize: false,
+                manual: !automatic,
               )
             : await transport.loadAudio(source, cancel);
       } on WorkerFailure catch (e) {
