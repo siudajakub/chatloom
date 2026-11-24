@@ -177,9 +177,7 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
           selectedNetwork: controller.selectedNetwork,
           selectedView: controller.personalFilter,
           onViewSelected: (view) => controller.setPersonalFilter(view, null),
-          onManageNetworks: () => context.push('/rooms/settings/networks'),
           onNetworkSelected: controller.setNetwork,
-          onMarkAllRead: usable ? controller.markViewRead : null,
           onReorderPins: controller.reorderPins,
         );
       },

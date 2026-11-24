@@ -303,7 +303,7 @@ class NotionNetworkMenu extends StatelessWidget {
     Padding(
       padding: const EdgeInsets.fromLTRB(12, 13, 12, 12),
       child: Text(
-        'Show chats',
+        onViewSelected == null ? 'Networks' : 'Show chats',
         style: NotionTokens.body.copyWith(fontWeight: FontWeight.w600),
       ),
     ),

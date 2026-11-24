@@ -518,7 +518,6 @@ void main() {
               networks: const ['messenger', 'telegram', 'whatsapp'],
               onNetworkSelected: (_) {},
               onViewSelected: (_) {},
-              onManageNetworks: () {},
             ),
             _Matrix(_Client()),
             scale: scale,
@@ -527,8 +526,10 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
         await tester.pumpAndSettle();
-        expect(find.text('Ignored'), findsOneWidget);
-        expect(find.text('Technical'), findsOneWidget);
+        // Networks only; views are the chips above the list.
+        expect(find.text('Networks'), findsOneWidget);
+        expect(find.text('Ignored'), findsNothing);
+        expect(find.text('Technical'), findsNothing);
         await capture(
           tester,
           'category-menu-${width.toInt()}-${(scale * 100).toInt()}',

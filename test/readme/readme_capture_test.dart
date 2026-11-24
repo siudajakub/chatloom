@@ -661,12 +661,8 @@ class _InboxDemoState extends State<_InboxDemo> {
       ],
       selectedNetwork: network,
       onNetworkSelected: (value) => setState(() => network = value),
-      // The adapter's dock menu also lists views and two actions; the
-      // scenes never pick them.
       selectedView: view,
       onViewSelected: (value) => setState(() => view = value),
-      onManageNetworks: _noop,
-      onMarkAllRead: _noop,
       unreadCount: shown.where((chat) => unreadOf(chat) > 0).length,
     );
   }

@@ -292,6 +292,11 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
       child: LayoutBuilder(
         builder: (context, constraints) {
           _width = constraints.maxWidth.isFinite ? constraints.maxWidth : 0;
+          // The list's vertical drag uses the platform touch slop (about
+          // 8 dp on Android, once the engine reports it); with the default
+          // 18 dp here the scroll won almost every swipe that drifted a
+          // little, so swipes "stopped working" a while after launch.
+          final gestureSettings = MediaQuery.maybeGestureSettingsOf(context);
           return RawGestureDetector(
             behavior: HitTestBehavior.translucent,
             gestures: {
@@ -299,6 +304,7 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
                   GestureRecognizerFactoryWithHandlers<_SwipeDragRecognizer>(
                     () => _SwipeDragRecognizer(_pointerAllowed),
                     (recognizer) => recognizer
+                      ..gestureSettings = gestureSettings
                       ..onStart = _start
                       ..onUpdate = _update
                       ..onEnd = _end

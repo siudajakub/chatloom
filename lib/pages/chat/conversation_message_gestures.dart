@@ -814,6 +814,11 @@ class _ConversationMessageGesturesState
                     >(
                       () => _MessageHorizontalDragRecognizer(_pointerAllowed),
                       (recognizer) => recognizer
+                        // Same slop as the timeline's vertical scroll (an
+                        // aspect dependency: no rebuild on inset frames).
+                        ..gestureSettings = MediaQuery.maybeGestureSettingsOf(
+                          context,
+                        )
                         ..dragStartBehavior = DragStartBehavior.down
                         ..onStart = _dragStart
                         ..onUpdate = _dragUpdate

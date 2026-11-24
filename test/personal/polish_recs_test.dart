@@ -12,6 +12,7 @@ import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:chatloom/personal/ui/notion_inbox_view_chips.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
+import 'package:flutter/gestures.dart' show DeviceGestureSettings;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -115,8 +116,8 @@ void main() {
   });
 
   group('View chips (UX-16)', () {
-    testWidgets('select the shared view, show the unread count and keep a '
-        'view chosen elsewhere labelled', (tester) async {
+    testWidgets('select the shared view and keep a view chosen elsewhere '
+        'labelled', (tester) async {
       var view = InboxFilter.inbox;
       await tester.pumpWidget(
         _host(
@@ -129,18 +130,18 @@ void main() {
           ),
         ),
       );
-      expect(find.text('All'), findsOneWidget);
-      expect(find.text('3'), findsOneWidget);
-      await tester.tap(find.text('Unread'));
+      expect(find.text('Main'), findsOneWidget);
+      expect(find.text('Unread'), findsNothing);
+      await tester.tap(find.text('Aside'));
       await tester.pumpAndSettle();
-      expect(view, InboxFilter.unread);
-      await tester.tap(find.text('Groups'));
+      expect(view, InboxFilter.aside);
+      await tester.tap(find.text('Requests'));
       await tester.pumpAndSettle();
-      expect(view, InboxFilter.groups);
+      expect(view, InboxFilter.requests);
       // Tapping the selected chip changes nothing.
-      await tester.tap(find.text('Groups'));
+      await tester.tap(find.text('Requests'));
       await tester.pumpAndSettle();
-      expect(view, InboxFilter.groups);
+      expect(view, InboxFilter.requests);
 
       await tester.pumpWidget(
         _host(
@@ -334,6 +335,57 @@ void main() {
       await gesture.up();
       await tester.pumpAndSettle();
       expect(mounts, [1]);
+    });
+
+    testWidgets('a slightly diagonal swipe beats the list scroll at the '
+        'platform touch slop', (tester) async {
+      narrow(tester);
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: NotionTheme.build(Brightness.dark),
+          home: Builder(
+            builder: (context) => MediaQuery(
+              // Android reports about 8 dp; the list's scroll uses it.
+              data: MediaQuery.of(context).copyWith(
+                gestureSettings: const DeviceGestureSettings(touchSlop: 8),
+              ),
+              child: Scaffold(
+                body: ListView(
+                  controller: scroll,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  children: [
+                    for (var i = 0; i < 30; i++)
+                      NotionSwipeAction(
+                        key: ValueKey('swipe$i'),
+                        startToEnd: NotionSwipeActionSide(
+                          icon: Icons.mark_chat_read_outlined,
+                          label: 'Read',
+                          onCommit: () => committed.add('read$i'),
+                        ),
+                        child: _row(),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(const ValueKey('swipe2'))),
+      );
+      // Two parts sideways, one part down: the vertical drift crosses 8 dp
+      // long before the sideways travel crossed the old 18 dp.
+      for (var i = 0; i < 20; i++) {
+        await gesture.moveBy(const Offset(8, 4));
+        await tester.pump();
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(committed, ['read2']);
+      expect(scroll.offset, 0);
     });
 
     testWidgets('a dismissing side flies off, closes its slot, then commits; '

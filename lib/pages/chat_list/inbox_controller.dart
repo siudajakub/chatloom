@@ -38,7 +38,7 @@ class InboxController extends ChangeNotifier {
     this.debounce = const Duration(milliseconds: 250),
     this.maxWait = const Duration(seconds: 1),
     Future<void>? localReady,
-    this.startupCatchUp = const Duration(seconds: 3),
+    this.startupCatchUp = Duration.zero,
   }) {
     _failed = client.onSyncStatus.value?.status == SyncStatus.error;
     _loading = client.prevBatch == null;
@@ -64,9 +64,10 @@ class InboxController extends ChangeNotifier {
     }
   }
 
-  /// Prefer a coherent first frame, but never require connectivity to open
-  /// an existing inbox. This deadline bounds only the network catch-up;
-  /// encrypted local metadata must finish before rows can be classified.
+  /// How long an existing inbox waits for the network catch-up after the
+  /// local restore. Zero by default (J, 2026-11-24): saved chats show at
+  /// once and the catch-up moves rows into place. Encrypted local metadata
+  /// must still finish before rows can be classified.
   final Duration startupCatchUp;
   bool _hydrating = false;
   bool get localLoadFailed => _localLoadFailed;
@@ -101,7 +102,9 @@ class InboxController extends ChangeNotifier {
         ]),
       );
       if (!restored || _detached) return;
-      if (catchUp != null && client.rooms.isNotEmpty) {
+      if (catchUp != null &&
+          client.rooms.isNotEmpty &&
+          startupCatchUp > Duration.zero) {
         final deadline = _startupDeadline = Completer<void>();
         _startupTimer = Timer(startupCatchUp, deadline.complete);
         await Future.any<void>([catchUp, deadline.future]);

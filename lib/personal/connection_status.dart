@@ -39,9 +39,11 @@ ConnectionPhase rawConnectionPhase({
   bool catchingUp = false,
 }) {
   // An answer is being processed: the connection works.
-  if (status == SyncStatus.processing || status == SyncStatus.cleaningUp) {
-    return ConnectionPhase.updating;
-  }
+  if (status == SyncStatus.processing) return ConnectionPhase.updating;
+  // The answer is stored and the rows show it; what follows (device key
+  // queries, to-device queue) is crypto housekeeping that can take seconds
+  // on a big account. Not "Updating…" (J, 2026-11-24).
+  if (status == SyncStatus.cleaningUp) return ConnectionPhase.online;
   if (failing) {
     return noNetwork
         ? ConnectionPhase.waitingForNetwork
@@ -325,6 +327,11 @@ class ConnectionStatusMonitor extends ChangeNotifier
         _stalled = false;
         _noNetwork = false;
         _probe++;
+        // Cleaning up follows a stored answer: the cached state is fresh.
+        if (status == SyncStatus.cleaningUp) {
+          _initialSyncPending = false;
+          _catchingUp = false;
+        }
       case SyncStatus.finished:
         _initialSyncPending = false;
         _reset();

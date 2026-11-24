@@ -9,6 +9,9 @@ import 'package:personal_core/personal_core.dart';
 double notionInboxDockHeight(TextScaler scaler) =>
     62 + (scaler.scale(16) - 20).clamp(0, double.infinity);
 
+/// Settings and network controls: half again a touch target (J, 2026-11-24).
+const double _sideWidth = NotionSize.touchTarget * 1.5;
+
 class NotionInboxDock extends StatefulWidget {
   final VoidCallback onSettings;
   final VoidCallback? onSearch;
@@ -16,9 +19,6 @@ class NotionInboxDock extends StatefulWidget {
   final List<String> networks;
   final String? selectedNetwork;
   final InboxFilter selectedView;
-  final ValueChanged<InboxFilter>? onViewSelected;
-  final VoidCallback? onManageNetworks;
-  final VoidCallback? onMarkAllRead;
   const NotionInboxDock({
     super.key,
     required this.onSettings,
@@ -27,9 +27,6 @@ class NotionInboxDock extends StatefulWidget {
     required this.networks,
     this.selectedNetwork,
     this.selectedView = InboxFilter.inbox,
-    this.onViewSelected,
-    this.onManageNetworks,
-    this.onMarkAllRead,
   });
   @override
   State<NotionInboxDock> createState() => _NotionInboxDockState();
@@ -55,10 +52,8 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
       networks: widget.networks,
       selected: widget.selectedNetwork,
       onSelected: widget.onNetworkSelected,
-      selectedView: widget.selectedView,
-      onViewSelected: widget.onViewSelected,
-      onManageNetworks: widget.onManageNetworks,
-      onMarkAllRead: widget.onMarkAllRead,
+      // Network switching only (J, 2026-11-24): views live in the chips
+      // above the list.
     );
     if (!mounted) return;
     setState(() => _expanded = false);
@@ -88,7 +83,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               SizedBox(
-                width: NotionSize.touchTarget,
+                width: _sideWidth,
                 child: IconButton(
                   key: const ValueKey('notion_dock_settings'),
                   onPressed: widget.onSettings,
@@ -129,7 +124,7 @@ class _NotionInboxDockState extends State<NotionInboxDock> {
               ),
               const NotionGlassDivider(),
               SizedBox(
-                width: NotionSize.touchTarget,
+                width: _sideWidth,
                 child: Semantics(
                   key: const ValueKey('notion_dock_network'),
                   expanded: _expanded,

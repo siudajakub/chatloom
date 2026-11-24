@@ -81,7 +81,7 @@ void main() {
     expect(find.text('Saved chat preview'), findsNothing);
     expect(find.text('Saved pin'), findsNothing);
     expect(find.text('75'), findsNothing);
-    expect(find.text('Requests'), findsNothing);
+    expect(find.text('9'), findsNothing, reason: 'no request count');
     await tester.tap(find.text('Search'));
     expect(searches, 0);
     await tester.pumpWidget(host(page(false)));
@@ -94,7 +94,8 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
   testWidgets(
-    'Aside is reachable from chips and the dock without changing network',
+    'the chips are Main, Aside and Requests; the dock menu only switches '
+    'networks',
     (tester) async {
       final views = <InboxFilter>[];
       final networks = <String?>[];
@@ -113,21 +114,35 @@ void main() {
                 networks: const ['whatsapp', 'telegram'],
                 selectedNetwork: 'whatsapp',
                 onNetworkSelected: networks.add,
-                onViewSelected: views.add,
               ),
             ],
           ),
         ),
       );
+      expect(find.text('Main'), findsOneWidget);
+      expect(find.text('Requests'), findsOneWidget);
+      expect(find.text('Unread'), findsNothing);
+      expect(find.text('Groups'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('notion_inbox_chip_aside')));
       await tester.pumpAndSettle();
       expect(views, [InboxFilter.aside]);
       await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Aside').last);
+      expect(find.text('Networks'), findsOneWidget);
+      for (final gone in [
+        'Main list',
+        'Groups',
+        'Ignored',
+        'Technical',
+        'Manage networks',
+        'Mark all as read',
+      ]) {
+        expect(find.text(gone), findsNothing, reason: gone);
+      }
+      await tester.tap(find.text('Telegram'));
       await tester.pumpAndSettle();
-      expect(views, [InboxFilter.aside, InboxFilter.aside]);
-      expect(networks, isEmpty);
+      expect(networks, ['telegram']);
+      expect(views, [InboxFilter.aside]);
       expect(tester.takeException(), isNull);
     },
   );
@@ -234,9 +249,8 @@ void main() {
         tester.view.physicalSize = const Size(320, 1000);
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
-        var view = InboxFilter.inbox;
         String? network = 'telegram';
-        var managed = 0;
+        const view = InboxFilter.ignored;
         await tester.pumpWidget(
           host(
             StatefulBuilder(
@@ -249,8 +263,6 @@ void main() {
                   selectedNetwork: network,
                   selectedView: view,
                   onNetworkSelected: (value) => update(() => network = value),
-                  onViewSelected: (value) => update(() => view = value),
-                  onManageNetworks: () => managed++,
                 ),
               ),
             ),
@@ -259,24 +271,11 @@ void main() {
         );
         await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Ignored'));
-        await tester.pumpAndSettle();
-        expect(view, InboxFilter.ignored);
-        expect(network, 'telegram');
-        await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
-        await tester.pumpAndSettle();
         await tester.scrollUntilVisible(find.text('All networks'), 150);
         await tester.tap(find.text('All networks'));
         await tester.pumpAndSettle();
-        expect(view, InboxFilter.ignored);
         expect(network, isNull);
-        await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
-        await tester.pumpAndSettle();
-        await tester.scrollUntilVisible(find.text('Manage networks'), 150);
-        await tester.tap(find.text('Manage networks'));
-        await tester.pumpAndSettle();
-        expect(managed, 1);
-        expect(find.text('Show chats'), findsNothing);
+        expect(find.text('Networks'), findsNothing);
         expect(tester.takeException(), isNull);
       },
     );
@@ -380,10 +379,10 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await tester.pumpAndSettle();
-    expect(find.text('Show chats'), findsOneWidget);
+    expect(find.text('Networks'), findsOneWidget);
     await tester.tapAt(const Offset(30, 150));
     await tester.pumpAndSettle();
-    expect(find.text('Show chats'), findsNothing);
+    expect(find.text('Networks'), findsNothing);
     expect(chatsOpened, 0);
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -393,7 +392,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
-    expect(find.text('Show chats'), findsNothing);
+    expect(find.text('Networks'), findsNothing);
   });
   testWidgets('selection fires once and modal Back dismisses', (tester) async {
     final selected = <String?>[];
@@ -415,12 +414,12 @@ void main() {
     await tester.tap(find.text('Slack'));
     await tester.pumpAndSettle();
     expect(selected, ['slack']);
-    expect(find.text('Show chats'), findsNothing);
+    expect(find.text('Networks'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await tester.pumpAndSettle();
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.text('Show chats'), findsNothing);
+    expect(find.text('Networks'), findsNothing);
   });
   testWidgets(
     'pins collapse when empty, order persists and chats stay in Messages',

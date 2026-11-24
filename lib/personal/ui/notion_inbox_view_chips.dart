@@ -4,17 +4,17 @@ import 'package:chatloom/ui/notion/notion.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:personal_core/personal_core.dart';
 
-/// The one-tap views above the inbox list (UX-16; Messenger's "All · Unread
-/// · Groups" chips, Telegram's folder tabs).
+/// The one-tap views above the inbox list (UX-16): the main list, Aside and
+/// message requests. Unread and Groups were dropped on J's request
+/// (2026-11-24); networks are chosen from the dock.
 const notionInboxChipViews = [
   InboxFilter.inbox,
-  InboxFilter.unread,
-  InboxFilter.groups,
   InboxFilter.aside,
+  InboxFilter.requests,
 ];
 
 String notionInboxChipLabel(InboxFilter view) =>
-    view == InboxFilter.inbox ? 'All' : inboxViewLabel(view);
+    view == InboxFilter.inbox ? 'Main' : inboxViewLabel(view);
 
 /// A row of in-content pills (opaque, never glass: they scroll with the
 /// list). They select the same view as the dock's "Show chats" menu, through
@@ -63,10 +63,7 @@ class _NotionInboxViewChipsState extends State<NotionInboxViewChips> {
     final unreadCount = widget.unreadCount;
     final requestCount = widget.requestCount;
     final palette = context.notion.palette;
-    final chips = [
-      ...notionInboxChipViews,
-      if (requestCount > 0) InboxFilter.requests,
-    ];
+    const chips = notionInboxChipViews;
     final views = [...chips, if (!chips.contains(selected)) selected];
     return Semantics(
       container: true,

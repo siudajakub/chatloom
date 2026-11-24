@@ -57,6 +57,7 @@ void main() {
           client,
           personal,
           localReady: Future.value(),
+          startupCatchUp: const Duration(seconds: 3),
         );
         var publications = 0;
         inbox.addListener(() => publications++);
@@ -82,6 +83,28 @@ void main() {
       });
     });
   }
+
+  test('saved chats show without waiting for the network by default', () {
+    fakeAsync((async) {
+      final client = _CachedClient();
+      ConversationRoom(client, '!fixture:example.invalid');
+      // A catch-up that never answers.
+      client.firstSyncReceived = Completer<void>().future;
+      final personal = PersonalClient.of(client);
+      final inbox = InboxController(
+        client,
+        personal,
+        localReady: Future.value(),
+      );
+      async.flushMicrotasks();
+      expect(inbox.loading, isFalse);
+      expect(inbox.index.rooms, hasLength(1));
+      inbox.dispose();
+      personal.dispose();
+      async.flushMicrotasks();
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
 
   test('local failure ends skeleton and retry restores the inbox once', () {
     fakeAsync((async) {
