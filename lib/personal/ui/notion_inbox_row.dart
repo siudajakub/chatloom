@@ -101,10 +101,17 @@ class NotionInboxRow extends StatelessWidget {
     // Unread: tinted row, bold name, brighter preview, accent badge; muted chats keep a
     // grey badge so they do not compete with chats that notify.
     final palette = context.notion.palette;
+    final highlighted = hasUnread && !muted && display.inboxUnreadHighlight;
+    final glass = context.notion.glass;
+    final unreadFill = Color.lerp(
+      notionGlassOpaque(context, glass.dockTint),
+      palette.accentTint,
+      display.inboxUnreadStrength,
+    )!;
     final rowColor = selected
         ? colors.selected
-        : hasUnread && !muted && display.inboxUnreadHighlight
-        ? palette.accentTint
+        : highlighted
+        ? unreadFill
         : colors.background;
     final unreadInk = NotionContrast.readable(rowColor, colors.accent);
     final badgeColor = muted ? colors.selected : palette.accentFill;
@@ -148,10 +155,7 @@ class NotionInboxRow extends StatelessWidget {
           child: _SelectedBackground(
             selected: selected,
             color: colors.selected,
-            restColor:
-                hasUnread && !muted && !selected && display.inboxUnreadHighlight
-                ? palette.accentTint
-                : null,
+            restColor: highlighted && !selected ? unreadFill : null,
             child: Material(
               type: MaterialType.transparency,
               borderRadius: NotionRadius.rowAll,
@@ -605,6 +609,9 @@ class _SelectedBackgroundState extends State<_SelectedBackground>
       key: const ValueKey('notion_inbox_row_tint'),
       decoration: BoxDecoration(
         color: widget.restColor ?? Colors.transparent,
+        border: widget.restColor == null
+            ? null
+            : Border.all(color: context.notion.glass.border, width: 0),
         borderRadius: NotionRadius.rowAll,
       ),
       child: CustomPaint(

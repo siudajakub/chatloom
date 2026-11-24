@@ -47,6 +47,10 @@ void main() {
       choice.forLeftSwipe(unread: true, archived: false),
       InboxSwipeChoice.moveDown,
     );
+    expect(
+      choice.forLeftSwipe(unread: true, archived: false, movable: false),
+      InboxSwipeChoice.read,
+    );
     expect(choice.forLeftSwipe(unread: true, archived: true), choice);
     expect(choice.forLeftSwipe(unread: false, archived: false), choice);
     expect(

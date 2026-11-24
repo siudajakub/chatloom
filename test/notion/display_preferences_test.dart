@@ -49,6 +49,7 @@ void main() {
       inboxNetworkBadges: false,
       inboxTimestamps: false,
       inboxUnreadHighlight: false,
+      inboxUnreadStrength: .75,
       messageTextScale: 1.2,
       messageSpacing: 1.5,
       messageAvatars: false,

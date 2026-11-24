@@ -122,7 +122,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('notion_inbox_chip_aside')));
       await tester.pumpAndSettle();
       expect(views, [InboxFilter.aside]);
-      await tester.tap(find.text('WhatsApp'));
+      await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Aside').last);
       await tester.pumpAndSettle();
@@ -378,7 +378,7 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('All networks'));
+    await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await tester.pumpAndSettle();
     expect(find.text('Show chats'), findsOneWidget);
     await tester.tapAt(const Offset(30, 150));
@@ -389,7 +389,7 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'Inbox network filter',
     );
-    await tester.tap(find.text('All networks'));
+    await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
@@ -410,13 +410,13 @@ void main() {
         ),
       ),
     );
-    await tester.tap(find.text('All networks'));
+    await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Slack'));
     await tester.pumpAndSettle();
     expect(selected, ['slack']);
     expect(find.text('Show chats'), findsNothing);
-    await tester.tap(find.text('All networks'));
+    await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await tester.pumpAndSettle();
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
@@ -537,16 +537,7 @@ void main() {
       scroll.dispose();
     },
   );
-  test('large dock label splits only between words', () {
-    expect(notionInboxDockLabelLines('All networks'), ['All', 'networks']);
-    expect(notionInboxDockLabelLines('Unread · Google Messages'), [
-      'Unread',
-      'Google Messages',
-    ]);
-    expect(notionInboxDockLabelLines('Telegram'), ['Telegram']);
-  });
-
-  testWidgets('dock network label never wraps mid-word at 200% text', (
+  testWidgets('dock keeps equal icon targets and a wide search at 200% text', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -567,17 +558,12 @@ void main() {
         scale: 2,
       ),
     );
-    final labels = find.descendant(
-      of: find.byKey(const ValueKey('notion_dock_network')),
-      matching: find.byType(Text),
-    );
-    expect(labels, findsNWidgets(2));
-    for (final text in tester.widgetList<Text>(labels)) {
-      expect(text.softWrap, isFalse);
-      expect(text.maxLines, 1);
-    }
-    expect(find.text('All'), findsOneWidget);
-    expect(find.text('networks'), findsOneWidget);
+    Size target(String name) =>
+        tester.getSize(find.byKey(ValueKey('notion_dock_$name')));
+    expect(target('settings'), target('network'));
+    expect(target('search').width, greaterThan(target('network').width * 2));
+    expect(find.byTooltip('Show chats, All networks'), findsOneWidget);
+    expect(find.text('Search'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -289,6 +289,24 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('a quick flick commits and can be caught on its return', (
+      tester,
+    ) async {
+      narrow(tester);
+      await tester.pumpWidget(swipe());
+      final row = find.byKey(const ValueKey('swipe'));
+      await tester.fling(row, const Offset(-90, 0), 1300);
+      expect(committed, ['archive']);
+      await tester.pump(const Duration(milliseconds: 25));
+      await tester.drag(row, const Offset(260, 0));
+      await tester.pumpAndSettle();
+      expect(committed, ['archive', 'read']);
+      expect(find.text('Archive'), findsNothing);
+      await tester.drag(row, const Offset(-180, 0));
+      await tester.pumpAndSettle();
+      expect(committed, ['archive', 'read', 'archive']);
+    });
+
     testWidgets('starting and ending a swipe never remounts the row', (
       tester,
     ) async {

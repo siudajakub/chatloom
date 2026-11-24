@@ -768,6 +768,15 @@ class _DisplaySettings extends StatelessWidget {
           value.inboxUnreadHighlight,
           (v) => update(value.copyWith(inboxUnreadHighlight: v)),
         ),
+        if (value.inboxUnreadHighlight)
+          slider(
+            'Unread colour strength',
+            value.inboxUnreadStrength,
+            0,
+            1,
+            20,
+            (v) => update(value.copyWith(inboxUnreadStrength: v)),
+          ),
         const NotionSectionHeader(title: 'Conversations'),
         slider(
           'Message spacing',

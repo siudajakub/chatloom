@@ -326,6 +326,29 @@ void main() {
       expect(reads, [room.id, other.id]);
     });
 
+    test(
+      'finds stored messages beyond the recent page and room cache',
+      () async {
+        final other = ConversationRoom(client, '!other:example.invalid');
+        final device = DeviceMessageSearch(
+          rooms: () => [room, other],
+          perRoom: 1,
+          maxRooms: 1,
+          read: (r, start, limit) async => switch ((r == room, start)) {
+            (true, 0) => [_edit(room, r'$edit', r'$older', 'apple', minute: 4)],
+            (true, 1) => [room.message(r'$older', 'pear', minute: 3)],
+            (false, 0) => [other.message(r'$quiet', 'apple', minute: 2)],
+            _ => [],
+          },
+          yieldSlice: () async {},
+        );
+        addTearDown(device.dispose);
+        device.search('apple');
+        await pumpEventQueue();
+        expect(device.hits.map((h) => h.eventId), [r'$older', r'$quiet']);
+      },
+    );
+
     test('a newer query cancels the running one', () async {
       final gate = Completer<void>();
       final device = DeviceMessageSearch(

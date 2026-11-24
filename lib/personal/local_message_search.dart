@@ -233,7 +233,8 @@ class DeviceMessageHit {
 /// of up to [maxRooms] chats, one room per slice with a frame between
 /// slices, and keeps a compact copy of their text; every query then filters
 /// that copy in slices of [sliceSize]. A newer query or [dispose] cancels
-/// the running pass. No network, nothing written.
+/// the running pass. Older local history is scanned page by page for the
+/// current query without retaining another copy of the complete archive.
 class DeviceMessageSearch extends ChangeNotifier {
   DeviceMessageSearch({
     required this.rooms,
@@ -242,7 +243,8 @@ class DeviceMessageSearch extends ChangeNotifier {
     this.maxRooms = 100,
     this.sliceSize = 2000,
     Future<void> Function()? yieldSlice,
-  }) : _yield = yieldSlice ?? localSearchYield;
+  }) : assert(perRoom > 0 && sliceSize > 0 && maxRooms >= 0),
+       _yield = yieldSlice ?? localSearchYield;
 
   /// The chats to read, most recent first (already filtered by the owner:
   /// joined, not technical, not the private journal).
@@ -252,6 +254,9 @@ class DeviceMessageSearch extends ChangeNotifier {
   final Future<void> Function() _yield;
 
   final _entries = <(String, DeviceMessageHit)>[];
+  // Only the recent pages are cached across queries. Other pages are
+  // filtered as they arrive, retaining matching messages and pending edits.
+  final _remaining = <(Room, int, Map<String, (DateTime, String)>)>[];
   Future<void>? _loading;
   bool _disposed = false;
   int _generation = 0;
@@ -275,9 +280,10 @@ class DeviceMessageSearch extends ChangeNotifier {
     final text = query.trim();
     if (text == _query) return;
     _query = text;
+    _hits = const [];
     final generation = ++_generation;
+    _done = null;
     if (text.isEmpty) {
-      _hits = const [];
       _done = '';
       _notify();
       return;
@@ -299,6 +305,35 @@ class DeviceMessageSearch extends ChangeNotifier {
           if (localTextMatches(folded, terms)) hits.add(hit);
         }
       }
+      if (!_current(generation)) return;
+      if (_remaining.isNotEmpty && hits.isNotEmpty) {
+        _hits = List.unmodifiable(hits);
+        _notify();
+      }
+      final seen = {for (final hit in hits) (hit.roomId, hit.eventId)};
+      for (final (room, offset, recentEdits) in _remaining) {
+        final edits = {...recentEdits};
+        var start = offset;
+        while (_current(generation)) {
+          await _yield();
+          if (!_current(generation)) return;
+          List<Event> page;
+          try {
+            page = await read(room, start, perRoom);
+          } catch (_) {
+            break;
+          }
+          if (!_current(generation)) return;
+          for (final (folded, hit) in compactMessages(page, edits: edits)) {
+            if (localTextMatches(folded, terms) &&
+                seen.add((hit.roomId, hit.eventId))) {
+              hits.add(hit);
+            }
+          }
+          if (page.length < perRoom) break;
+          start += perRoom;
+        }
+      }
       hits.sort((a, b) {
         final byTime = b.time.compareTo(a.time);
         return byTime != 0 ? byTime : a.eventId.compareTo(b.eventId);
@@ -315,9 +350,13 @@ class DeviceMessageSearch extends ChangeNotifier {
   bool _current(int generation) => !_disposed && generation == _generation;
 
   Future<void> _load() async {
-    final list = rooms().take(maxRooms).toList();
+    final list = rooms();
     for (final (index, room) in list.indexed) {
       if (_disposed) return;
+      if (index >= maxRooms) {
+        _remaining.add((room, 0, {}));
+        continue;
+      }
       if (index > 0) await _yield();
       List<Event> events;
       try {
@@ -327,7 +366,11 @@ class DeviceMessageSearch extends ChangeNotifier {
         continue;
       }
       if (_disposed) return;
-      _entries.addAll(compactMessages(events));
+      final edits = <String, (DateTime, String)>{};
+      _entries.addAll(compactMessages(events, edits: edits));
+      if (events.length >= perRoom) {
+        _remaining.add((room, perRoom, edits));
+      }
     }
   }
 
@@ -340,6 +383,7 @@ class DeviceMessageSearch extends ChangeNotifier {
     _disposed = true;
     _generation++;
     _entries.clear();
+    _remaining.clear();
     super.dispose();
   }
 }
@@ -347,16 +391,19 @@ class DeviceMessageSearch extends ChangeNotifier {
 /// [events] of one room as (folded text, hit) pairs: one per message, with
 /// the text of its latest edit; edits of messages not in [events] and
 /// everything that is not a readable message are left out.
-List<(String, DeviceMessageHit)> compactMessages(List<Event> events) {
-  final edits = <String, (DateTime, String)>{};
+List<(String, DeviceMessageHit)> compactMessages(
+  List<Event> events, {
+  Map<String, (DateTime, String)>? edits,
+}) {
+  final pendingEdits = edits ?? <String, (DateTime, String)>{};
   final originals = <Event>[];
   for (final event in events) {
     final text = localMessageText(event);
     if (text == null) continue;
     if (text.edit) {
-      final previous = edits[text.targetId];
+      final previous = pendingEdits[text.targetId];
       if (previous == null || event.originServerTs.isAfter(previous.$1)) {
-        edits[text.targetId] = (event.originServerTs, text.text);
+        pendingEdits[text.targetId] = (event.originServerTs, text.text);
       }
     } else {
       originals.add(event);
@@ -364,7 +411,7 @@ List<(String, DeviceMessageHit)> compactMessages(List<Event> events) {
   }
   final result = <(String, DeviceMessageHit)>[];
   for (final event in originals) {
-    final text = edits[event.eventId]?.$2 ?? event.body;
+    final text = pendingEdits.remove(event.eventId)?.$2 ?? event.body;
     result.add((
       searchFold(text),
       DeviceMessageHit(

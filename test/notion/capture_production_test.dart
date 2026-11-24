@@ -562,7 +562,7 @@ void main() {
     await _save(tester, 'inbox-390');
     await _scrollUnderChrome(tester);
     await _save(tester, 'inbox-390-scrolled', scrollToTop: false);
-    await tester.tap(find.text('All networks'));
+    await tester.tap(find.byKey(const ValueKey('notion_dock_network')));
     await _save(tester, 'network-filter-390');
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();

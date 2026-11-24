@@ -1127,24 +1127,30 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     final ignored = projection.placementFor(room) == ChatPlacement.ignored;
     // Move down/up applies only where the unread rule raises the row; the
     // shown record says whether it is moved down (no per-row recompute).
-    final movable = unread && !ignored && !pinned && !metadata.muted;
+    final activity = inbox.index.recordFor(room)?.lastActivity;
+    final movable =
+        unread && !ignored && !pinned && !metadata.muted && activity != null;
     final movedDown =
         movable && (inbox.index.recordFor(room)?.movedDown ?? false);
     void commit(ChatMenuAction action, String refused) {
-      if (!mounted) return;
-      final item = chatMenuItems(
-        personal,
-        room,
-        pinLabel: '',
-        unpinLabel: '',
-      ).firstWhereOrNull((item) => item.action == action);
+      if (!mounted || room.client != personal.client) return;
+      final moving =
+          action == ChatMenuAction.moveUp || action == ChatMenuAction.moveDown;
+      final item = chatMenuItems(personal, room, pinLabel: '', unpinLabel: '')
+          .firstWhereOrNull(
+            (item) =>
+                item.action == action ||
+                (moving &&
+                    (item.action == ChatMenuAction.moveUp ||
+                        item.action == ChatMenuAction.moveDown)),
+          );
       if (item == null || !item.enabled) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(refused)));
         return;
       }
-      applyRowAction(room, action);
+      applyRowAction(room, item.action);
     }
 
     NotionSwipeActionSide? side(InboxSwipeChoice choice) => switch (choice) {
@@ -1206,7 +1212,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         InboxSwipeChoice.parse(
           AppSettings.inboxSwipeLeft.value,
           InboxSwipeChoice.archive,
-        ).forLeftSwipe(unread: unread, archived: archived),
+        ).forLeftSwipe(unread: unread, archived: archived, movable: movable),
       ),
       toEnd: side(
         InboxSwipeChoice.parse(

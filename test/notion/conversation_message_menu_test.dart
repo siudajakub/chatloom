@@ -6,6 +6,9 @@ import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/conversation_message_actions.dart';
 import 'package:chatloom/pages/chat/conversation_message_menu.dart';
 import 'package:chatloom/pages/chat/events/message.dart';
+import 'package:chatloom/pages/chat/events/video_player.dart';
+import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/worker_readiness.dart';
 import 'package:chatloom/personal/capabilities.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
@@ -264,6 +267,33 @@ void main() {
       expect(f.room.reactionsSent, 0);
     },
   );
+
+  testWidgets('holding a shared video offers manual transcription', (
+    tester,
+  ) async {
+    final f = _Fixture(
+      content: {
+        'msgtype': 'm.video',
+        'body': 'video.mp4',
+        'url': 'mxc://example.invalid/fixture',
+        'external_url': 'https://www.instagram.com/reel/fixture/',
+        'info': {'mimetype': 'video/mp4', 'w': 320, 'h': 480},
+      },
+    );
+    final personal = ConversationPersonal(f.client)
+      ..workerReadiness = WorkerReadiness(
+        receivedAt: DateTime.now(),
+        transcriptionMedia: 4,
+      );
+    PersonalClient.debugUse(f.client, personal);
+    addTearDown(f.dispose);
+    addTearDown(personal.dispose);
+    await f.mount(tester);
+    await tester.longPress(find.byType(EventVideoPlayer));
+    await tester.pumpAndSettle();
+    expect(find.text('Transcribe'), findsOneWidget);
+    expect(find.text('Reply'), findsOneWidget);
+  });
 
   testWidgets('choosing an emoji reacts once and closes the overlay', (
     tester,

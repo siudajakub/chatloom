@@ -21,7 +21,11 @@ enum InboxSwipeChoice {
   InboxSwipeChoice forLeftSwipe({
     required bool unread,
     required bool archived,
-  }) => this == archive && unread && !archived ? moveDown : this;
+    bool movable = true,
+  }) {
+    if (this != archive || !unread || archived) return this;
+    return movable ? moveDown : read;
+  }
 }
 
 /// The long-press actions of an inbox row (Telegram, Messenger). Deliberately

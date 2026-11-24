@@ -69,6 +69,7 @@ class NotionDisplayPreferences
     this.inboxNetworkBadges = true,
     this.inboxTimestamps = true,
     this.inboxUnreadHighlight = true,
+    this.inboxUnreadStrength = .35,
     this.messageTextScale = 1,
     this.messageSpacing = 1,
     this.messageAvatars = true,
@@ -99,6 +100,7 @@ class NotionDisplayPreferences
   final bool inboxNetworkBadges;
   final bool inboxTimestamps;
   final bool inboxUnreadHighlight;
+  final double inboxUnreadStrength;
   final double messageTextScale;
   final double messageSpacing;
   final bool messageAvatars;
@@ -163,6 +165,7 @@ class NotionDisplayPreferences
       inboxNetworkBadges: flag('inboxNetworkBadges', true),
       inboxTimestamps: flag('inboxTimestamps', true),
       inboxUnreadHighlight: flag('inboxUnreadHighlight', true),
+      inboxUnreadStrength: number('inboxUnreadStrength', .35, 0, 1),
       messageTextScale: number('messageTextScale', 1, .85, 1.4),
       messageSpacing: number('messageSpacing', 1, .75, 1.5),
       messageAvatars: flag('messageAvatars', true),
@@ -225,6 +228,7 @@ class NotionDisplayPreferences
     'inboxNetworkBadges': inboxNetworkBadges,
     'inboxTimestamps': inboxTimestamps,
     'inboxUnreadHighlight': inboxUnreadHighlight,
+    'inboxUnreadStrength': inboxUnreadStrength,
     'messageTextScale': messageTextScale,
     'messageSpacing': messageSpacing,
     'messageAvatars': messageAvatars,
@@ -257,6 +261,7 @@ class NotionDisplayPreferences
     bool? inboxNetworkBadges,
     bool? inboxTimestamps,
     bool? inboxUnreadHighlight,
+    double? inboxUnreadStrength,
     double? messageTextScale,
     double? messageSpacing,
     bool? messageAvatars,
@@ -284,6 +289,7 @@ class NotionDisplayPreferences
     'inboxNetworkBadges': inboxNetworkBadges ?? this.inboxNetworkBadges,
     'inboxTimestamps': inboxTimestamps ?? this.inboxTimestamps,
     'inboxUnreadHighlight': inboxUnreadHighlight ?? this.inboxUnreadHighlight,
+    'inboxUnreadStrength': inboxUnreadStrength ?? this.inboxUnreadStrength,
     'messageTextScale': messageTextScale ?? this.messageTextScale,
     'messageSpacing': messageSpacing ?? this.messageSpacing,
     'messageAvatars': messageAvatars ?? this.messageAvatars,
@@ -325,6 +331,7 @@ class NotionDisplayPreferences
           inboxNetworkBadges == other.inboxNetworkBadges &&
           inboxTimestamps == other.inboxTimestamps &&
           inboxUnreadHighlight == other.inboxUnreadHighlight &&
+          inboxUnreadStrength == other.inboxUnreadStrength &&
           messageTextScale == other.messageTextScale &&
           messageSpacing == other.messageSpacing &&
           messageAvatars == other.messageAvatars &&
@@ -354,6 +361,7 @@ class NotionDisplayPreferences
     inboxNetworkBadges,
     inboxTimestamps,
     inboxUnreadHighlight,
+    inboxUnreadStrength,
     messageTextScale,
     messageSpacing,
     messageAvatars,

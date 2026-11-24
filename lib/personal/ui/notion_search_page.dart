@@ -8,6 +8,7 @@ import 'package:chatloom/pages/chat_list/inbox_controller.dart';
 import 'package:chatloom/personal/bridge_contact_search.dart';
 import 'package:chatloom/personal/bridge_start_chat.dart';
 import 'package:chatloom/personal/chat_handles.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/local_message_search.dart';
 import 'package:chatloom/personal/matrix_start_chat.dart';
@@ -164,6 +165,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   void initState() {
     super.initState();
     _directory.addListener(_directoryChanged);
+    HiddenMessages.instance.addListener(_resetMessageSearch);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       // whoami + capabilities only: no query leaves the device.
@@ -209,6 +211,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       _releaseInbox?.call();
       _releaseInbox = null;
       _holdInbox();
+      _resetMessageSearch();
     }
   }
 
@@ -219,10 +222,19 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     _typing?.cancel();
     _device?.removeListener(_deviceChanged);
     _device?.dispose();
+    HiddenMessages.instance.removeListener(_resetMessageSearch);
     _directory.removeListener(_directoryChanged);
     _query.dispose();
     _focus.dispose();
     super.dispose();
+  }
+
+  void _resetMessageSearch() {
+    _device?.removeListener(_deviceChanged);
+    _device?.dispose();
+    _device = null;
+    if (_applied.isNotEmpty) _deviceSearch.search(_applied);
+    if (mounted) setState(() {});
   }
 
   void _directoryChanged() {
@@ -275,81 +287,92 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     );
   });
 
-  List<SearchChatCandidate> _chats() =>
-      _chatsMemo.resolve((_generation, _handlesRevision), () {
-        final index = widget.inbox.index;
-        final projection = index.projection;
-        String network(Room room) =>
-            notionNetworkLabel(projection.classifier.classify(room).network);
-        final result = <SearchChatCandidate>[];
-        for (final record in index.records) {
-          if (record.technical) continue;
-          final roomIds = [
-            record.representativeRoomId,
-            if (record.entityId.startsWith('person:'))
-              ...?projection
-                  .groupById(record.entityId.substring('person:'.length))
-                  ?.members
-                  .map((m) => m.roomId),
-          ];
-          result.add(
-            SearchChatCandidate(
-              record: record,
-              roomIds: roomIds,
-              // A merged person is found by its sources' network names.
-              extraText: personSearchText(projection, record),
-              // ... and a chat by the other person's username or number.
-              handles: record.isGroup
-                  ? const []
-                  : {
-                      for (final id in roomIds)
-                        if (_client.getRoomById(id) case final room?)
-                          ..._handles.handlesOf(room, network: network),
-                    }.toList(),
-            ),
-          );
-        }
-        return result;
-      });
+  List<SearchChatCandidate> _chats() => _chatsMemo.resolve(
+    (_generation, _handlesRevision),
+    () {
+      final index = widget.inbox.index;
+      final projection = index.projection;
+      String network(Room room) =>
+          notionNetworkLabel(projection.classifier.classify(room).network);
+      final result = <SearchChatCandidate>[];
+      for (final record in index.records) {
+        if (record.technical) continue;
+        final group = record.entityId.startsWith('person:')
+            ? projection.groupById(record.entityId.substring('person:'.length))
+            : null;
+        final roomIds = group == null
+            ? [record.representativeRoomId]
+            : projection.activeSourcesOf(group).map((room) => room.id).toList();
+        result.add(
+          SearchChatCandidate(
+            record: record,
+            roomIds: roomIds,
+            // Both the local nickname and the original chat name match.
+            extraText: [
+              personSearchText(projection, record),
+              ...record.networks.map(notionNetworkLabel),
+              if (group == null)
+                if (_client.getRoomById(record.representativeRoomId)
+                    case final room?)
+                  room.getLocalizedDisplayname(),
+            ].join(' '),
+            // ... and a chat by the other person's username or number.
+            handles: record.isGroup
+                ? const []
+                : {
+                    for (final id in roomIds)
+                      if (_client.getRoomById(id) case final room?)
+                        ..._handles.handlesOf(room, network: network),
+                  }.toList(),
+          ),
+        );
+      }
+      return result;
+    },
+  );
 
-  List<SearchMessageCandidate> _messages() =>
-      _messagesMemo.resolve(_generation, () {
-        final index = widget.inbox.index;
-        final projection = index.projection;
-        final result = <SearchMessageCandidate>[];
-        for (final room in index.rooms) {
-          if (room.membership != Membership.join ||
-              PersonalPrivacy.isJournal(room) ||
-              projection.classifier.classify(room).technical) {
-            continue;
-          }
-          final event = room.lastEvent;
-          if (event == null ||
-              event.redacted ||
-              event.type != EventTypes.Message) {
-            continue;
-          }
-          final text = personalPreviewLabel(event);
-          if (text.trim().isEmpty) continue;
-          result.add(
-            SearchMessageCandidate(
-              roomId: room.id,
-              eventId: event.eventId,
-              chatName: projection.displayName(room),
-              text: text,
-              preview: personalEventPreview(event),
-              time: event.originServerTs,
-            ),
-          );
+  List<SearchMessageCandidate> _messages() => _messagesMemo.resolve(
+    (_generation, HiddenMessages.instance.revision),
+    () {
+      final index = widget.inbox.index;
+      final projection = index.projection;
+      final result = <SearchMessageCandidate>[];
+      for (final room in index.rooms) {
+        if (room.membership != Membership.join ||
+            PersonalPrivacy.isJournal(room) ||
+            projection.classifier.classify(room).technical) {
+          continue;
         }
-        return result;
-      });
+        final event = room.lastEvent;
+        if (event == null ||
+            event.redacted ||
+            HiddenMessages.hides(event) ||
+            event.type != EventTypes.Message) {
+          continue;
+        }
+        final text = personalPreviewLabel(event);
+        if (text.trim().isEmpty) continue;
+        result.add(
+          SearchMessageCandidate(
+            roomId: room.id,
+            eventId: event.eventId,
+            chatName: projection.displayName(room),
+            text: text,
+            preview: personalEventPreview(event),
+            time: event.originServerTs,
+          ),
+        );
+      }
+      return result;
+    },
+  );
 
   UnifiedSearchResults _results() => _resultsMemo.resolve(
     (
       _applied,
       _generation,
       _handlesRevision,
+      HiddenMessages.instance.revision,
       _directory,
       _directory.revision,
       _device?.query == _applied ? _device?.hits : null,
@@ -377,7 +400,12 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     for (final hit in device.hits) {
       if (latest.contains(hit.eventId)) continue;
       final room = _client.getRoomById(hit.roomId);
-      if (room == null) continue;
+      if (room == null ||
+          room.membership != Membership.join ||
+          PersonalPrivacy.isJournal(room) ||
+          projection.classifier.classify(room).technical) {
+        continue;
+      }
       final snippet = localSnippet(hit.text, terms);
       final own = hit.senderId == _client.userID;
       final sender = own
@@ -729,31 +757,10 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       }
     }
 
-    // People by network.
-    final callout = _callout();
-    if (callout != null) items.add(callout);
-    for (final group in results.networks) {
-      final key = 'net:${group.bridge.botId}';
-      items.add(_Item('$key:header', (c) => _networkHeader(c, group)));
-      final all = _expanded.contains(key);
-      final shown = all
-          ? group.people
-          : group.people.take(NotionSearchPage.peopleLimit);
-      for (final hit in shown) {
-        items.add(_Item('$key:${hit.key}', (c) => _personRow(c, hit, group)));
-      }
-      final hidden = group.people.length - NotionSearchPage.peopleLimit;
-      if (!all && hidden > 0) items.add(_more(key, 'Show $hidden more'));
-      if (group.lookup case final lookup?) {
-        items.add(_Item('$key:lookup', (c) => _lookupRow(c, group, lookup)));
-      }
-      if (group.canSearch) {
-        items.add(_Item('$key:search', (c) => _searchRow(c, group, query)));
-      }
-    }
-
     // Messages.
-    items.add(_header('messages', 'Messages'));
+    if (results.messages.isNotEmpty || (_device?.searching ?? false)) {
+      items.add(_header('messages', 'Messages on this device'));
+    }
     final all = _expanded.contains('messages');
     final shown = all
         ? results.messages
@@ -785,13 +792,36 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
         ),
       );
     }
+    // People by network.
+    final callout = _callout();
+    if (callout != null) items.add(callout);
+    for (final group in results.networks) {
+      final key = 'net:${group.bridge.botId}';
+      items.add(_Item('$key:header', (c) => _networkHeader(c, group)));
+      final all = _expanded.contains(key);
+      final shown = all
+          ? group.people
+          : group.people.take(NotionSearchPage.peopleLimit);
+      for (final hit in shown) {
+        items.add(_Item('$key:${hit.key}', (c) => _personRow(c, hit, group)));
+      }
+      final hidden = group.people.length - NotionSearchPage.peopleLimit;
+      if (!all && hidden > 0) items.add(_more(key, 'Show $hidden more'));
+      if (group.lookup case final lookup?) {
+        items.add(_Item('$key:lookup', (c) => _lookupRow(c, group, lookup)));
+      }
+      if (group.canSearch) {
+        items.add(_Item('$key:search', (c) => _searchRow(c, group, query)));
+      }
+    }
+
     items.add(
       _Item(
         'history',
         (context) => NotionListRow(
           leading: const Icon(Icons.manage_search, size: NotionSize.icon),
           title: 'Search message history for “$query”',
-          subtitle: 'Older messages of a chat you choose, from the server',
+          subtitle: 'Load older messages from a conversation you choose',
           onTap: _searchHistory,
         ),
       ),

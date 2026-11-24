@@ -248,7 +248,7 @@ void main() {
     expect(menu, findsNothing);
   });
 
-  testWidgets('dock label fades through when the network changes', (
+  testWidgets('dock glyph fades through when the network changes', (
     tester,
   ) async {
     Widget dock(String? network) => _host(
@@ -266,10 +266,16 @@ void main() {
     await tester.pumpWidget(dock(null));
     await tester.pumpWidget(dock('telegram'));
     await tester.pump(const Duration(milliseconds: 30));
-    expect(find.text('All networks'), findsOneWidget);
-    expect(find.text('Telegram'), findsOneWidget);
+    expect(find.byTooltip('Show chats, Telegram'), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is NotionNetworkGlyph && widget.network == 'telegram',
+      ),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
-    expect(find.text('All networks'), findsNothing);
+    expect(find.byTooltip('Show chats, All networks'), findsNothing);
   });
 
   testWidgets('two-column side pane fades in on navigation and settles', (

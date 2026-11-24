@@ -459,7 +459,7 @@ void main() {
     final directory = BridgeDirectory(BridgeProvisioningApi(_bridges(fixture)));
     final opened = _Opened();
     await _openSearch(tester, fixture, directory, opened);
-    await _type(tester, 'alicja');
+    await _type(tester, 'whatsapp alicja');
     expect(find.text('Chats'), findsOneWidget);
     // Her chat is listed once, under Chats, not again under WhatsApp.
     expect(find.text('Alicja Fikcyjna'), findsOneWidget);
@@ -468,7 +468,7 @@ void main() {
     expect(opened.rooms, [fixture.dm.id]);
 
     await _type(tester, 'faktura');
-    expect(find.text('Messages'), findsOneWidget);
+    expect(find.text('Messages on this device'), findsOneWidget);
     expect(find.textContaining('Faktura w załączniku'), findsOneWidget);
     await tester.tap(find.textContaining('Faktura w załączniku'));
     await tester.pumpAndSettle();

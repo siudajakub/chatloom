@@ -97,9 +97,6 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
   /// back (the action was refused or did not remove it).
   static const Duration _dismissHold = Duration(milliseconds: 700);
 
-  /// The side the current drag reveals, fixed once the drag has a direction.
-  NotionSwipeActionSide? _side;
-
   bool get _rtl => Directionality.of(context) == TextDirection.rtl;
 
   /// The side revealed by a drag towards [dx] (screen direction).
@@ -147,7 +144,6 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
   void _start(DragStartDetails details) {
     _spring?.stop();
     _armed = false;
-    _side = null;
   }
 
   void _update(DragUpdateDetails details) {
@@ -159,7 +155,6 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
       _setArmed(false);
       return;
     }
-    _side = side;
     final limit = _width * 0.75;
     _offset.value = next.clamp(-limit, limit);
     final arm = _width * widget.armFraction;
@@ -178,8 +173,15 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
   }
 
   void _end(DragEndDetails details) {
-    final commit = _armed ? _side : null;
     final velocity = details.primaryVelocity ?? 0;
+    final offset = _offset.value;
+    // A deliberate flick need not cross a third of a wide row. Require
+    // travel as well as outward velocity so a tap or reversal cannot commit.
+    final flick =
+        offset.abs() >= kMinInteractiveDimension &&
+        velocity.abs() >= 700 &&
+        velocity.sign == offset.sign;
+    final commit = _armed || flick ? _sideFor(offset) : null;
     _armed = false;
     if (commit != null &&
         commit.dismisses &&

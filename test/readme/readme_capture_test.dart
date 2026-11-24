@@ -1344,13 +1344,13 @@ void main() {
     await reel.play(const Duration(milliseconds: 640));
     await reel.hold(const Duration(milliseconds: 1500));
     reel.mark('home');
-    await reel.tap(find.text('All networks'));
+    await reel.tap(find.byKey(const ValueKey('notion_dock_network')));
     await reel.play(const Duration(milliseconds: 480));
     await reel.hold(const Duration(milliseconds: 900));
     await reel.tap(find.text('Telegram').last);
     await reel.play(const Duration(milliseconds: 480));
     await reel.hold(const Duration(milliseconds: 1600));
-    await reel.tap(find.text('Telegram').last);
+    await reel.tap(find.byKey(const ValueKey('notion_dock_network')));
     await reel.play(const Duration(milliseconds: 480));
     await reel.hold(const Duration(milliseconds: 600));
     await reel.tap(find.text('All networks').last);
