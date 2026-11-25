@@ -103,7 +103,8 @@ void main() {
         expect(
           PushCatchUp.wanted(outcome, mobile: true, lifecycle: lifecycle),
           PushCatchUp.after.contains(outcome) &&
-              lifecycle != AppLifecycleState.resumed,
+              lifecycle != AppLifecycleState.resumed &&
+              lifecycle != AppLifecycleState.inactive,
           reason: '$outcome $lifecycle',
         );
       }

@@ -696,9 +696,10 @@ class BackgroundPush {
   }
 
   Future<void> _processPush(Future<void> Function() process) async {
-    final inBackground =
-        PlatformInfos.isAndroid &&
-        WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+    final inBackground = PushCatchUp.away(
+      mobile: PlatformInfos.isAndroid,
+      lifecycle: WidgetsBinding.instance.lifecycleState,
+    );
     final acquired =
         inBackground &&
         await ForegroundServices.startService('background_push');

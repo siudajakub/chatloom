@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:chatloom/personal/push_diagnostics.dart';
+import 'package:chatloom/utils/mobile_sync_policy.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleState;
@@ -102,7 +103,7 @@ class PushCatchUp {
   static bool away({
     required bool mobile,
     required AppLifecycleState? lifecycle,
-  }) => mobile && lifecycle != AppLifecycleState.resumed;
+  }) => mobile && !mobileSyncRunsIn(lifecycle);
 
   /// Starts (or joins) the catch-up of [client]; null when it is skipped.
   /// Completes with the number of backlog notifications shown, or null when

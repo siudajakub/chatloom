@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:chatloom/personal/connection_status.dart';
 import 'package:chatloom/utils/client_manager.dart';
+import 'package:chatloom/utils/mobile_sync_policy.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:matrix/matrix.dart';
@@ -50,8 +51,7 @@ class MobileSyncLifecycle {
   bool? _foreground;
 
   /// Whether the sync loop runs in [state].
-  static bool syncsIn(AppLifecycleState? state) =>
-      state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+  static bool syncsIn(AppLifecycleState? state) => mobileSyncRunsIn(state);
 
   /// Whether the loop runs now; null before the first state is known.
   bool? get foreground => _foreground;
