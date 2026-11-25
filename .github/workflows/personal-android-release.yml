@@ -53,13 +53,25 @@ jobs:
           restore-keys: android-release-
       - name: Resolve pinned dependencies
         run: flutter pub get --enforce-lockfile
-      - name: Composer and recorder regressions
+      - name: Client regressions before packaging
         run: >-
           flutter test --no-pub
           test/notion/composer_dictation_layout_test.dart
           test/notion/dictation_dialog_test.dart
+          test/notion/composer_send_test.dart
           test/personal/round_video/round_video_recorder_controls_test.dart
           test/personal/recording_lifecycle_test.dart
+          test/personal/merge_conversations_test.dart
+          test/personal/inbox_activity_order_test.dart
+          test/personal/personal_client_journal_test.dart
+          test/personal/conversation_read_button_test.dart
+          test/personal/notification_actions_test.dart
+          test/personal/push_rule_mirror_test.dart
+          test/personal/beeper_mute_test.dart
+          test/personal/conversation_search_test.dart
+          test/personal/notion_search_page_test.dart
+          test/utils/background_push_catch_up_test.dart
+          test/utils/mobile_sync_lifecycle_test.dart
       - name: Private build inputs
         shell: bash
         env:
