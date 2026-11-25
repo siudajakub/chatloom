@@ -105,6 +105,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
   final _chatsMemo = PersonalSearchMemo<List<SearchChatCandidate>>();
   final _messagesMemo = PersonalSearchMemo<List<SearchMessageCandidate>>();
   final _resultsMemo = PersonalSearchMemo<UnifiedSearchResults>();
+  final _messageHitsMemo = PersonalSearchMemo<List<SearchMessageCandidate>>();
 
   /// Usernames and numbers of the people of one-to-one chats, cached per
   /// room until their member state changes.
@@ -233,6 +234,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     _device?.removeListener(_deviceChanged);
     _device?.dispose();
     _device = null;
+    _messageHitsMemo.clear();
     if (_applied.isNotEmpty) _deviceSearch.search(_applied);
     if (mounted) setState(() {});
   }
@@ -245,8 +247,12 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
 
   void _loadContacts() => unawaited(_directory.loadContacts(_bridges()));
 
-  void _typed(String _) {
+  void _typed(String text) {
     _typing?.cancel();
+    if (text.trim().isEmpty) {
+      _apply();
+      return;
+    }
     _typing = Timer(NotionSearchPage.typingDebounce, _apply);
   }
 
@@ -255,6 +261,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     _typing = null;
     final text = _query.text.trim();
     if (!mounted || text == _applied) return;
+    _messageHitsMemo.clear();
     setState(() {
       _applied = text;
       _expanded.clear();
@@ -375,7 +382,6 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       HiddenMessages.instance.revision,
       _directory,
       _directory.revision,
-      _device?.query == _applied ? _device?.hits : null,
     ),
     () => mergeUnifiedSearch(
       query: _applied,
@@ -383,50 +389,57 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       people: _people(),
       bridges: _bridges(),
       remote: _directory.stateOf,
-      messages: [..._messages(), ..._deviceMessages()],
+      messages: _messages(),
       roomExists: (id) => _client.getRoomById(id) != null,
     ),
   );
 
-  /// The device's hits for the applied query (not yet the latest messages
-  /// of [_messages], which may repeat them), as message candidates.
-  List<SearchMessageCandidate> _deviceMessages() {
+  /// Merge already matched device hits with the live previews. Progress
+  /// from the archive scan doesn't rerun chat, contact or message matching.
+  List<SearchMessageCandidate> _messageHits(
+    List<SearchMessageCandidate> previews,
+  ) {
     final device = _device;
-    if (device == null || device.query != _applied) return const [];
-    final latest = {for (final m in _messages()) m.eventId};
-    final projection = widget.inbox.projection;
-    final terms = localSearchTerms(_applied);
-    final result = <SearchMessageCandidate>[];
-    for (final hit in device.hits) {
-      if (latest.contains(hit.eventId)) continue;
-      final room = _client.getRoomById(hit.roomId);
-      if (room == null ||
-          room.membership != Membership.join ||
-          PersonalPrivacy.isJournal(room) ||
-          projection.classifier.classify(room).technical) {
-        continue;
-      }
-      final snippet = localSnippet(hit.text, terms);
-      final own = hit.senderId == _client.userID;
-      final sender = own
-          ? 'You'
-          : room.isDirectChatForDisplay
-          ? null
-          : room
-                .unsafeGetUserFromMemoryOrFallback(hit.senderId)
-                .calcDisplayname();
-      result.add(
-        SearchMessageCandidate(
-          roomId: hit.roomId,
-          eventId: hit.eventId,
-          chatName: projection.displayName(room),
-          text: hit.text,
-          preview: sender == null ? snippet : '$sender: $snippet',
-          time: hit.time,
-        ),
-      );
+    if (device == null || device.query != _applied || device.hits.isEmpty) {
+      return previews;
     }
-    return result;
+    return _messageHitsMemo.resolve((_generation, previews, device.hits), () {
+      final latest = {for (final m in _messages()) m.eventId};
+      final projection = widget.inbox.projection;
+      final roomNames = <String, String?>{};
+      final result = <SearchMessageCandidate>[...previews];
+      for (final hit in device.hits) {
+        if (latest.contains(hit.eventId)) continue;
+        final name = roomNames.putIfAbsent(hit.roomId, () {
+          final room = _client.getRoomById(hit.roomId);
+          if (room == null ||
+              room.membership != Membership.join ||
+              PersonalPrivacy.isJournal(room) ||
+              projection.classifier.classify(room).technical) {
+            return null;
+          }
+          return projection.displayName(room);
+        });
+        if (name == null) continue;
+        result.add(
+          SearchMessageCandidate(
+            roomId: hit.roomId,
+            eventId: hit.eventId,
+            chatName: name,
+            text: hit.text,
+            senderId: hit.senderId,
+            time: hit.time,
+          ),
+        );
+      }
+      if (previews.isNotEmpty && result.length > previews.length) {
+        result.sort((a, b) {
+          final byTime = b.time.compareTo(a.time);
+          return byTime != 0 ? byTime : a.eventId.compareTo(b.eventId);
+        });
+      }
+      return result;
+    });
   }
 
   final _recentMemo = PersonalSearchMemo<List<Room>>();
@@ -666,7 +679,7 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
 
   Widget _resultsList(BuildContext context) {
     final results = _results();
-    final items = _items(results);
+    final items = _items(results, _messageHits(results.messages));
     final keys = <Key, int>{
       for (final (index, item) in items.indexed) item.key: index,
     };
@@ -705,7 +718,10 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     );
   }
 
-  List<_Item> _items(UnifiedSearchResults results) {
+  List<_Item> _items(
+    UnifiedSearchResults results,
+    List<SearchMessageCandidate> messages,
+  ) {
     final query = _applied;
     final items = <_Item>[];
     final matrixId = _matrixId;
@@ -713,7 +729,10 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
       items.add(_header('matrix', 'Matrix'));
       items.add(_Item('matrix:$matrixId', (c) => _matrixRow(c, matrixId)));
     }
-    if (results.isEmpty && !_anyChecking() && !(_device?.searching ?? false)) {
+    if (results.isEmpty &&
+        messages.isEmpty &&
+        !_anyChecking() &&
+        !(_device?.searching ?? false)) {
       // An exact Matrix id needs no "nothing found" below its row.
       if (matrixId != null) return items;
       items.add(
@@ -758,19 +777,17 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     }
 
     // Messages.
-    if (results.messages.isNotEmpty || (_device?.searching ?? false)) {
+    if (messages.isNotEmpty || (_device?.searching ?? false)) {
       items.add(_header('messages', 'Messages on this device'));
     }
     final all = _expanded.contains('messages');
-    final shown = all
-        ? results.messages
-        : results.messages.take(NotionSearchPage.messageLimit);
+    final shown = all ? messages : messages.take(NotionSearchPage.messageLimit);
     for (final message in shown) {
       items.add(
         _Item('msg:${message.eventId}', (c) => _messageRow(c, message)),
       );
     }
-    final hidden = results.messages.length - NotionSearchPage.messageLimit;
+    final hidden = messages.length - NotionSearchPage.messageLimit;
     if (!all && hidden > 0) items.add(_more('messages', 'Show $hidden more'));
     if (_device?.searching ?? false) {
       items.add(
@@ -1091,10 +1108,20 @@ class _NotionSearchPageState extends State<NotionSearchPage> {
     return NotionInboxRow(
       avatar: notionInboxAvatar(widget.personal, widget.inbox.projection, room),
       name: message.chatName,
-      preview: message.preview,
+      preview: _messagePreview(room, message),
       time: message.time.localizedTimeShort(context),
       onTap: () => _openMessage(message),
     );
+  }
+
+  String _messagePreview(Room room, SearchMessageCandidate message) {
+    final id = message.senderId;
+    if (id == null) return message.preview;
+    final snippet = localSnippet(message.text, localSearchTerms(_applied));
+    if (id == _client.userID) return 'You: $snippet';
+    if (room.isDirectChatForDisplay) return snippet;
+    final sender = room.unsafeGetUserFromMemoryOrFallback(id).calcDisplayname();
+    return '$sender: $snippet';
   }
 }
 

@@ -369,6 +369,88 @@ void main() {
       expect(device.searching, isFalse);
     });
 
+    test('publishes the first room while the rest is still loading', () async {
+      final other = ConversationRoom(client, '!other:example.invalid');
+      final gate = Completer<void>();
+      final first = room.message(r'$first', 'apple', minute: 5);
+      final second = other.message(r'$second', 'apple', minute: 6);
+      final device = DeviceMessageSearch(
+        rooms: () => [room, other],
+        read: (r, start, limit) async {
+          if (r == other) await gate.future;
+          return [r == room ? first : second];
+        },
+        yieldSlice: () async {},
+      );
+      addTearDown(device.dispose);
+      device.search('apple');
+      await pumpEventQueue();
+      expect(device.searching, isTrue);
+      expect(device.hits.single.roomId, room.id);
+      final firstResults = device.hits;
+      gate.complete();
+      await pumpEventQueue();
+      expect(device.searching, isFalse);
+      expect(device.hits, hasLength(2));
+      expect(firstResults, hasLength(1));
+    });
+
+    test('clearing the query cancels the rest of the recent scan', () async {
+      final other = ConversationRoom(client, '!other:example.invalid');
+      final gate = Completer<void>();
+      final reads = <Room>[];
+      final first = room.message(r'$first', 'apple', minute: 5);
+      final second = other.message(r'$second', 'apple', minute: 6);
+      final device = DeviceMessageSearch(
+        rooms: () => [room, other],
+        read: (r, start, limit) async {
+          reads.add(r);
+          if (r == room) await gate.future;
+          return [r == room ? first : second];
+        },
+        yieldSlice: () async {},
+      );
+      addTearDown(device.dispose);
+      device.search('apple');
+      await pumpEventQueue();
+      expect(reads, [room]);
+      device.search('');
+      gate.complete();
+      await pumpEventQueue();
+      expect(reads, [room]);
+      expect(device.hits, isEmpty);
+      expect(device.searching, isFalse);
+
+      device.search('apple');
+      await pumpEventQueue();
+      expect(reads, [room, room, other]);
+      expect(device.hits, hasLength(2));
+    });
+
+    test('older matches appear before the last archive page', () async {
+      final gate = Completer<void>();
+      final older = room.message(r'$older', 'apple', minute: 3);
+      final device = DeviceMessageSearch(
+        rooms: () => [room],
+        maxRooms: 0,
+        perRoom: 1,
+        read: (r, start, limit) async {
+          if (start == 0) return [older];
+          await gate.future;
+          return [];
+        },
+        yieldSlice: () async {},
+      );
+      addTearDown(device.dispose);
+      device.search('apple');
+      await pumpEventQueue();
+      expect(device.searching, isTrue);
+      expect(device.hits.single.eventId, older.eventId);
+      gate.complete();
+      await pumpEventQueue();
+      expect(device.searching, isFalse);
+    });
+
     test('a room whose store fails is skipped', () async {
       final other = ConversationRoom(client, '!other:example.invalid');
       final device = DeviceMessageSearch(

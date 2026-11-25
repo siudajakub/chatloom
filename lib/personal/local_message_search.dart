@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math' as math;
 
 import 'package:chatloom/personal/bridge_contact_search.dart'
@@ -230,11 +231,10 @@ class DeviceMessageHit {
 
 /// The global search's "Messages on this device" (FX-04 option A). Once per
 /// search page, on the first query, it reads up to [perRoom] stored events
-/// of up to [maxRooms] chats, one room per slice with a frame between
-/// slices, and keeps a compact copy of their text; every query then filters
-/// that copy in slices of [sliceSize]. A newer query or [dispose] cancels
-/// the running pass. Older local history is scanned page by page for the
-/// current query without retaining another copy of the complete archive.
+/// of up to [maxRooms] chats and keeps a compact copy of their text.
+/// Matches appear during the scan. A newer query, clearing the query or
+/// [dispose] stops it between pages. Older history is filtered as it is
+/// read and only matching messages are kept.
 class DeviceMessageSearch extends ChangeNotifier {
   DeviceMessageSearch({
     required this.rooms,
@@ -253,18 +253,19 @@ class DeviceMessageSearch extends ChangeNotifier {
   final int perRoom, maxRooms, sliceSize;
   final Future<void> Function() _yield;
 
+  static const _publicationInterval = Duration(milliseconds: 150);
   final _entries = <(String, DeviceMessageHit)>[];
-  // Only the recent pages are cached across queries. Other pages are
-  // filtered as they arrive, retaining matching messages and pending edits.
-  final _remaining = <(Room, int, Map<String, (DateTime, String)>)>[];
-  Future<void>? _loading;
+  final _older = <(Room, int, Map<String, (DateTime, String)>)>[];
+  List<Room>? _rooms;
+  int _loadedRooms = 0;
+  bool _running = false;
   bool _disposed = false;
   int _generation = 0;
   String _query = '';
   String? _done;
   List<DeviceMessageHit> _hits = const [];
 
-  /// Hits of the last finished query, newest first.
+  /// Hits found for the current query so far, newest first.
   List<DeviceMessageHit> get hits => _hits;
 
   /// Reading the store or filtering is still running for [query].
@@ -278,101 +279,137 @@ class DeviceMessageSearch extends ChangeNotifier {
   /// Searches [query]; an empty query clears the hits.
   void search(String query) {
     final text = query.trim();
-    if (text == _query) return;
+    if (_disposed || text == _query) return;
     _query = text;
     _hits = const [];
-    final generation = ++_generation;
-    _done = null;
-    if (text.isEmpty) {
-      _done = '';
-      _notify();
-      return;
-    }
+    _generation++;
+    _done = text.isEmpty ? '' : null;
     _notify();
-    unawaited(_run(generation, text, localSearchTerms(text)));
+    if (searching && !_running) unawaited(_runLatest());
+  }
+
+  Future<void> _runLatest() async {
+    _running = true;
+    try {
+      // A page already being read can finish. A new query reuses that page
+      // when possible instead of starting a concurrent read.
+      while (!_disposed && searching) {
+        final query = _query;
+        await _run(_generation, query, localSearchTerms(query));
+      }
+    } finally {
+      _running = false;
+    }
   }
 
   Future<void> _run(int generation, String query, List<String> terms) async {
-    final hits = <DeviceMessageHit>[];
-    try {
-      await (_loading ??= _load());
-      for (var i = 0; i < _entries.length; i += sliceSize) {
-        if (i > 0) await _yield();
-        if (!_current(generation)) return;
-        final end = math.min(i + sliceSize, _entries.length);
-        for (var j = i; j < end; j++) {
-          final (folded, hit) = _entries[j];
-          if (localTextMatches(folded, terms)) hits.add(hit);
+    final pending = <DeviceMessageHit>[];
+    final seen = <(String, String)>{};
+    final clock = Stopwatch()..start();
+
+    void match(Iterable<(String, DeviceMessageHit)> entries) {
+      for (final (folded, hit) in entries) {
+        if (localTextMatches(folded, terms) &&
+            seen.add((hit.roomId, hit.eventId))) {
+          pending.add(hit);
         }
       }
-      if (!_current(generation)) return;
-      if (_remaining.isNotEmpty && hits.isNotEmpty) {
-        _hits = List.unmodifiable(hits);
-        _notify();
+      // Show the first hit at once. Batch later results so a common query
+      // does not rebuild the list on every page.
+      if (pending.isNotEmpty &&
+          (_hits.isEmpty || clock.elapsed >= _publicationInterval)) {
+        _publish(pending);
+        clock.reset();
       }
-      final seen = {for (final hit in hits) (hit.roomId, hit.eventId)};
-      for (final (room, offset, recentEdits) in _remaining) {
-        final edits = {...recentEdits};
-        var start = offset;
-        while (_current(generation)) {
+    }
+
+    try {
+      if (terms.isNotEmpty) {
+        final list = _rooms ??= rooms();
+        final recentCount = math.min(list.length, maxRooms);
+        for (var i = 0; i < _entries.length; i += sliceSize) {
           await _yield();
           if (!_current(generation)) return;
-          List<Event> page;
-          try {
-            page = await read(room, start, perRoom);
-          } catch (_) {
-            break;
-          }
+          final end = math.min(i + sliceSize, _entries.length);
+          match(_entries.getRange(i, end));
+        }
+        while (_loadedRooms < recentCount) {
+          await _yield();
           if (!_current(generation)) return;
-          for (final (folded, hit) in compactMessages(page, edits: edits)) {
-            if (localTextMatches(folded, terms) &&
-                seen.add((hit.roomId, hit.eventId))) {
-              hits.add(hit);
-            }
+          final room = list[_loadedRooms];
+          var page = const <Event>[];
+          try {
+            page = await read(room, 0, perRoom);
+          } catch (_) {
+            // A room whose store cannot be read is skipped.
           }
-          if (page.length < perRoom) break;
-          start += perRoom;
+          if (_disposed || _query.isEmpty) return;
+          final edits = <String, (DateTime, String)>{};
+          final entries = compactMessages(page, edits: edits);
+          _entries.addAll(entries);
+          _loadedRooms++;
+          if (page.length >= perRoom) _older.add((room, perRoom, edits));
+          if (!_current(generation)) return;
+          match(entries);
+        }
+        final history = [
+          ..._older,
+          for (final room in list.skip(recentCount))
+            (room, 0, <String, (DateTime, String)>{}),
+        ];
+        for (final (room, offset, recentEdits) in history) {
+          final edits = {...recentEdits};
+          var start = offset;
+          while (_current(generation)) {
+            await _yield();
+            if (!_current(generation)) return;
+            List<Event> page;
+            try {
+              page = await read(room, start, perRoom);
+            } catch (_) {
+              break;
+            }
+            if (!_current(generation)) return;
+            match(compactMessages(page, edits: edits));
+            if (page.length < perRoom) break;
+            start += perRoom;
+          }
         }
       }
-      hits.sort((a, b) {
-        final byTime = b.time.compareTo(a.time);
-        return byTime != 0 ? byTime : a.eventId.compareTo(b.eventId);
-      });
     } catch (_) {
-      hits.clear();
+      // Keep any results already found if the rest of the scan fails.
     }
     if (!_current(generation)) return;
-    _hits = hits;
     _done = query;
+    if (pending.isNotEmpty) {
+      _publish(pending);
+    } else {
+      _notify();
+    }
+  }
+
+  void _publish(List<DeviceMessageHit> pending) {
+    int compare(DeviceMessageHit a, DeviceMessageHit b) {
+      final byTime = b.time.compareTo(a.time);
+      return byTime != 0 ? byTime : a.eventId.compareTo(b.eventId);
+    }
+
+    pending.sort(compare);
+    final merged = <DeviceMessageHit>[];
+    var i = 0;
+    for (final hit in pending) {
+      while (i < _hits.length && compare(_hits[i], hit) <= 0) {
+        merged.add(_hits[i++]);
+      }
+      merged.add(hit);
+    }
+    merged.addAll(_hits.getRange(i, _hits.length));
+    pending.clear();
+    _hits = UnmodifiableListView(merged);
     _notify();
   }
 
   bool _current(int generation) => !_disposed && generation == _generation;
-
-  Future<void> _load() async {
-    final list = rooms();
-    for (final (index, room) in list.indexed) {
-      if (_disposed) return;
-      if (index >= maxRooms) {
-        _remaining.add((room, 0, {}));
-        continue;
-      }
-      if (index > 0) await _yield();
-      List<Event> events;
-      try {
-        events = await read(room, 0, perRoom);
-      } catch (_) {
-        // A room whose store cannot be read is skipped; the others count.
-        continue;
-      }
-      if (_disposed) return;
-      final edits = <String, (DateTime, String)>{};
-      _entries.addAll(compactMessages(events, edits: edits));
-      if (events.length >= perRoom) {
-        _remaining.add((room, perRoom, edits));
-      }
-    }
-  }
 
   void _notify() {
     if (!_disposed) notifyListeners();
@@ -383,7 +420,9 @@ class DeviceMessageSearch extends ChangeNotifier {
     _disposed = true;
     _generation++;
     _entries.clear();
-    _remaining.clear();
+    _older.clear();
+    _rooms = null;
+    _hits = const [];
     super.dispose();
   }
 }

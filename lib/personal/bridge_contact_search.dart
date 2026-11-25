@@ -848,7 +848,7 @@ class SearchChatHit {
 /// name match ([searchRank] gives 0 or 1).
 const searchHandleRankOffset = 2;
 
-/// The latest loaded message of a conversation.
+/// A message that can appear in global search.
 @immutable
 class SearchMessageCandidate {
   const SearchMessageCandidate({
@@ -858,6 +858,7 @@ class SearchMessageCandidate {
     required this.text,
     required this.time,
     String? preview,
+    this.senderId,
   }) : preview = preview ?? text;
 
   final String roomId;
@@ -869,6 +870,10 @@ class SearchMessageCandidate {
 
   /// What the row shows (with the inbox's sender prefix).
   final String preview;
+
+  /// Set by device-history search. Its snippet and sender label are
+  /// rendered only when the row is built.
+  final String? senderId;
   final DateTime time;
 }
 
@@ -1209,7 +1214,7 @@ UnifiedSearchResults mergeUnifiedSearch({
   // Messages.
   final messageHits = <SearchMessageCandidate>[
     for (final message in messages)
-      if (searchRank(searchFold(message.text), terms) != null) message,
+      if (terms.every(searchFold(message.text).contains)) message,
   ]..sort((a, b) => b.time.compareTo(a.time));
 
   return UnifiedSearchResults(
