@@ -71,8 +71,14 @@ class _Phone {
     // As `ClientManager.createClient` sets it for the app's clients.
     client.quickSyncRetry = true;
     client.syncErrorMaxTimeoutSec = foregroundSyncRetryCapSec;
+    // Freshness also notifies for health callouts. These assertions track
+    // changes to the header's shown phase, which has its own debounce.
+    var phase = monitor.value;
     monitor.addListener(() {
-      if (seen.isEmpty || seen.last != monitor.value) seen.add(monitor.value);
+      final next = monitor.value;
+      if (next == phase) return;
+      seen.add(next);
+      phase = next;
     });
     lifecycle.seed(AppLifecycleState.resumed);
     // The loop as the startup leaves it (`backgroundSync` is on by default;

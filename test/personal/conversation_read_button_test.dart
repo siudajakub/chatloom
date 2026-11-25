@@ -27,7 +27,7 @@ class _Database extends ConversationDatabase {
 
 class _Client extends ConversationClient {
   @override
-  final database = _Database();
+  final _Database database = _Database();
 
   final unreadWrites = <bool>[];
   Completer<void>? unreadGate;
