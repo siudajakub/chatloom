@@ -472,6 +472,7 @@ class _MergedChatPageState extends State<_MergedChatView>
   void _personalChanged() {
     if (!mounted) return;
     _routingCache = null;
+    _refreshSyncedDraft();
     final signature = _computePersonalSignature();
     if (signature == _personalSignature) return;
     _personalSignature = signature;
@@ -896,11 +897,41 @@ class _MergedChatPageState extends State<_MergedChatView>
         draft?['text'] is! String) {
       return;
     }
-    sendController.text = draft!['text'] as String;
-    _inputEmpty = sendController.text.isEmpty;
-    _savedDraftText = sendController.text;
-    if (sendController.text.isEmpty) return;
-    final target = draft['target'];
+    _showDraft(draft!['text'] as String, draft['target']);
+  }
+
+  void _refreshSyncedDraft() {
+    final composing = sendController.value.composing;
+    if (!_draftRestored ||
+        loading ||
+        sending ||
+        _choosingSource ||
+        replyEvent != null ||
+        editEvent != null ||
+        (_draftTimer?.isActive ?? false) ||
+        sendController.text != (_savedDraftText ?? '') ||
+        (composing.isValid && !composing.isCollapsed)) {
+      return;
+    }
+    final key = 'draft:person:${group.id}';
+    if (personal.conflicts.containsKey(key)) return;
+    final draft = personal.values[key];
+    final text = draft == null ? '' : draft['text'];
+    if (text is! String || text == sendController.text) return;
+    setState(() => _showDraft(text, draft?['target']));
+  }
+
+  void _showDraft(String text, Object? target) {
+    if (_needsNetworkChoice) problem = null;
+    _needsNetworkChoice = false;
+    _draftTarget = null;
+    _savedDraftText = text;
+    _inputEmpty = text.isEmpty;
+    sendController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    if (text.isEmpty) return;
     if (target is Map) {
       try {
         final restored = SendTarget.fromJson(Map<String, dynamic>.from(target));
@@ -916,7 +947,7 @@ class _MergedChatPageState extends State<_MergedChatView>
         problem =
             'The draft source could not be read. Choose a network before sending.';
       }
-    } else if (sendController.text.isNotEmpty) {
+    } else {
       _needsNetworkChoice = true;
       problem =
           'This draft has no saved source. Choose a network before sending.';
@@ -2975,12 +3006,14 @@ class _MergedChatPageState extends State<_MergedChatView>
   Future<void> _allRead() async {
     // Same targets as the read button (never a local echo); a source with
     // nothing to mark is skipped. The receipt follows the receipt setting.
+    final sources = _readSources;
     final targets = conversationReadTargets(
-      _readSources,
+      sources,
       loaded: (room) => timelines[room.id]?.events ?? const [],
     );
     // The user asked for this: say so and offer the retry (CS-13).
-    if (await markConversationRead(targets) > 0 && mounted) {
+    if (await markConversationRead(targets, clearUnreadIn: sources) > 0 &&
+        mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           persist: false,
@@ -3104,7 +3137,7 @@ class _MergedChatPageState extends State<_MergedChatView>
     _hold.dispose();
     _mentionsHandled.dispose();
     _generation++;
-    if (_savedDraftText != sendController.text && editEvent == null) {
+    if ((_savedDraftText ?? '') != sendController.text && editEvent == null) {
       try {
         final frozen = _draftTarget ?? target;
         unawaited(

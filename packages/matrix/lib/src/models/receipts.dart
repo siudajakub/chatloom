@@ -125,18 +125,27 @@ class LatestReceiptStateData {
   String eventId;
   int ts;
 
+  /// Time of the referenced event, when cached on this device. [ts] records
+  /// when the receipt was sent and can be later than newer unread messages.
+  int? eventOriginServerTs;
+
   DateTime get timestamp => DateTime.fromMillisecondsSinceEpoch(ts);
 
-  LatestReceiptStateData(this.eventId, this.ts);
+  LatestReceiptStateData(this.eventId, this.ts, {this.eventOriginServerTs});
 
   factory LatestReceiptStateData.fromJson(Map<String, dynamic> json) {
-    return LatestReceiptStateData(json['e'], json['ts']);
+    return LatestReceiptStateData(
+      json['e'],
+      json['ts'],
+      eventOriginServerTs: json['et'] is int ? json['et'] as int : null,
+    );
   }
 
   Map<String, dynamic> toJson() => {
     // abbreviated names, because we will store a lot of these.
     'e': eventId,
     'ts': ts,
+    if (eventOriginServerTs != null) 'et': eventOriginServerTs,
   };
 }
 
@@ -240,8 +249,21 @@ class LatestReceiptState {
       'thread': byThread.map((k, v) => MapEntry(k, v.toJson())),
   };
 
+  /// Account read positions that can apply to a main timeline event.
+  Iterable<LatestReceiptStateData> get ownMainTimelineReceipts sync* {
+    for (final timeline in [global, ?mainThread]) {
+      if (timeline.ownPublic case final receipt?) yield receipt;
+      if (timeline.ownPrivate case final receipt?) yield receipt;
+      // Older snapshots can contain only the consolidated receipt.
+      if (timeline.ownPublic == null && timeline.ownPrivate == null) {
+        if (timeline.latestOwnReceipt case final receipt?) yield receipt;
+      }
+    }
+  }
+
   Future<void> update(ReceiptEventContent content, Room room) async {
-    final updatedTimelines = <LatestReceiptStateForTimeline>[];
+    final updatedTimelines = <LatestReceiptStateForTimeline>{};
+    Map<String, int?>? knownTargets;
     final ownUserid = room.client.userID!;
 
     content.receipts.forEach((eventId, receiptsByType) {
@@ -263,6 +285,13 @@ class LatestReceiptState {
             receipt.originServerTs,
           );
           if (user == ownUserid) {
+            if (threadId == null || threadId == 'main') {
+              knownTargets ??= {
+                for (final receipt in ownMainTimelineReceipts)
+                  if (receipt.eventOriginServerTs case final position?)
+                    receipt.eventId: position,
+              };
+            }
             if (receiptType == ReceiptType.mReadPrivate) {
               timeline.ownPrivate = receiptData;
             } else if (receiptType == ReceiptType.mRead) {
@@ -276,11 +305,21 @@ class LatestReceiptState {
       });
     });
 
+    final targetOrigins = knownTargets;
+    if (targetOrigins != null) {
+      for (final receipt in ownMainTimelineReceipts) {
+        final id = receipt.eventId;
+        if (!targetOrigins.containsKey(id)) {
+          targetOrigins[id] = await _cachedEventOrigin(room, id);
+        }
+        receipt.eventOriginServerTs = targetOrigins[id];
+      }
+    }
+
     // set the latest receipt to the one furthest down in the timeline, or if we don't know that, the newest ts.
     if (updatedTimelines.isEmpty) return;
 
-    final eventOrder = await room.client.database.getEventIdList(room);
-
+    List<String>? eventOrder;
     for (final timeline in updatedTimelines) {
       if (timeline.ownPrivate?.eventId == timeline.ownPublic?.eventId) {
         if (timeline.ownPrivate != null) {
@@ -297,8 +336,11 @@ class LatestReceiptState {
       } else if (public == null) {
         timeline.latestOwnReceipt = private;
       } else {
-        final privatePos = eventOrder.indexOf(private.eventId);
-        final publicPos = eventOrder.indexOf(public.eventId);
+        final order = eventOrder ??= await room.client.database.getEventIdList(
+          room,
+        );
+        final privatePos = order.indexOf(private.eventId);
+        final publicPos = order.indexOf(public.eventId);
 
         if (publicPos < 0 ||
             privatePos <= publicPos ||
@@ -308,6 +350,20 @@ class LatestReceiptState {
           timeline.latestOwnReceipt = public;
         }
       }
+    }
+  }
+
+  static Future<int?> _cachedEventOrigin(Room room, String eventId) async {
+    final preview = room.lastEvent;
+    if (preview?.eventId == eventId) {
+      return preview!.originServerTs.millisecondsSinceEpoch;
+    }
+    try {
+      final event = await room.client.database.getEventById(eventId, room);
+      return event?.originServerTs.millisecondsSinceEpoch;
+    } catch (_) {
+      // Receipt processing can continue with an unknown target position.
+      return null;
     }
   }
 }

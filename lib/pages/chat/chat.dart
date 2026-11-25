@@ -586,20 +586,33 @@ class ChatController extends State<ChatPageWithRoom>
   Future<void> _loadDraft() async {
     // Protected personal storage is native-only; web keeps composer state in memory.
     if (kIsWeb) return;
-    final personal = PersonalClient.of(room.client);
+    final target = room;
+    final accountId = target.client.userID;
+    final personal = PersonalClient.of(target.client);
     final prefs = Matrix.of(context).store;
+    final legacyKey = 'draft_${target.id}';
     try {
-      var draft = await personal.loadDraft(room);
-      final legacy = prefs.getString('draft_$roomId');
+      var draft = await personal.loadDraft(target);
+      final legacy = prefs.getString(legacyKey);
       if (draft == null && legacy != null) {
-        await personal.saveDraft(room, legacy);
-        await prefs.remove('draft_$roomId');
+        await personal.saveDraft(target, legacy);
+        await prefs.remove(legacyKey);
         draft = legacy;
       }
-      _savedDraft = draft ?? '';
-      if (mounted && sendController.text.isEmpty && draft != null) {
-        sendController.text = draft;
+      if (!mounted ||
+          !identical(room, target) ||
+          target.client.userID != accountId) {
+        return;
       }
+      final text = draft ?? '';
+      _savedDraft = text;
+      if (sendController.text.isEmpty && text.isNotEmpty) {
+        setState(() => _showDraft(text));
+      }
+      _syncedDraftRoom = target;
+      _syncedDraftAccount = accountId;
+      _syncedDraftOwner = personal..addListener(_refreshSyncedDraft);
+      _refreshSyncedDraft();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -611,6 +624,42 @@ class ChatController extends State<ChatPageWithRoom>
         );
       }
     }
+  }
+
+  Room? _syncedDraftRoom;
+  String? _syncedDraftAccount;
+  PersonalClient? _syncedDraftOwner;
+
+  void _refreshSyncedDraft() {
+    final personal = _syncedDraftOwner;
+    final composing = sendController.value.composing;
+    if (!mounted ||
+        personal == null ||
+        !identical(room, _syncedDraftRoom) ||
+        personal.client.userID != _syncedDraftAccount ||
+        composerBusy ||
+        replyEvent != null ||
+        editEvent != null ||
+        (_storeInputTimeoutTimer?.isActive ?? false) ||
+        sendController.text != _savedDraft ||
+        (composing.isValid && !composing.isCollapsed)) {
+      return;
+    }
+    final key = 'draft:$roomId';
+    if (personal.conflicts.containsKey(key)) return;
+    final value = personal.values[key];
+    final text = value == null ? '' : value['text'];
+    if (text is! String || text == _savedDraft) return;
+    setState(() => _showDraft(text));
+  }
+
+  void _showDraft(String text) {
+    _savedDraft = text;
+    _inputTextIsEmpty = text.isEmpty;
+    sendController.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
   }
 
   Future<void> _shareItems() async {
@@ -1652,6 +1701,7 @@ class ChatController extends State<ChatPageWithRoom>
     WidgetsBinding.instance.removeObserver(this);
     timeline?.cancelSubscriptions();
     timeline = null;
+    _syncedDraftOwner?.removeListener(_refreshSyncedDraft);
     _flushDraft();
     SeenPositions.instance.flush(widget.room.client);
     typingCoolDown?.cancel();

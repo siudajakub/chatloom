@@ -115,6 +115,7 @@ void main() {
               latestOwnReceipt: LatestReceiptStateData(
                 '\$1234',
                 DateTime.now().millisecondsSinceEpoch,
+                eventOriginServerTs: 123,
               ),
               ownPrivate: null,
               ownPublic: null,
@@ -128,6 +129,10 @@ void main() {
         );
         expect(room?.id, '!testroom');
         expect(room!.receiptState.global.latestOwnReceipt!.eventId, '\$1234');
+        expect(
+          room.receiptState.global.latestOwnReceipt!.eventOriginServerTs,
+          123,
+        );
         final rooms = await database.getRoomList(
           Client('testclient', database: await getMatrixSdkDatabase()),
         );

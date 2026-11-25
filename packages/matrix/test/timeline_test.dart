@@ -549,6 +549,10 @@ void main() {
         expect(room.receiptState.global.latestOwnReceipt?.eventId, '\$2');
         expect(room.receiptState.global.ownPublic?.eventId, '\$2');
         expect(room.receiptState.global.ownPrivate?.eventId, '\$2');
+        expect(
+          room.receiptState.global.ownPrivate?.eventOriginServerTs,
+          testTimeStamp - 1000,
+        );
       },
     );
 

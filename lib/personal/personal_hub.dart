@@ -478,9 +478,9 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                   visible: personal.canResyncMetadata,
                   child: NotionListRow(
                     leading: const Icon(Icons.sync),
-                    title: 'Refresh merged conversations',
+                    title: 'Refresh inbox settings',
                     subtitle:
-                        'Load the merged conversations saved by your other devices again.',
+                        'Reload merged conversations and chats moved down.',
                     onTap: () => run(() async {
                       final asked = await personal.requestMetadataResync();
                       if (!mounted) return;
@@ -488,7 +488,7 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
                         SnackBar(
                           content: Text(
                             asked
-                                ? 'Refreshing merged conversations…'
+                                ? 'Refreshing inbox settings…'
                                 : 'A refresh is already on its way.',
                           ),
                         ),

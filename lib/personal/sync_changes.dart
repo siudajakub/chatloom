@@ -253,7 +253,7 @@ String syncEntityTitle(
     return 'Reminder${_conversationOf(personal, operation!.payload)}';
   }
   if (kind == 'worker.pairing') return 'Background service pairing';
-  if (kind == 'metadata.resync') return 'Refresh merged conversations';
+  if (kind == 'metadata.resync') return 'Refresh inbox settings';
   if (kind == 'device.trust') return 'Approve another device';
   if (entity == transcriptionPolicyEntity) return 'Transcription settings';
   for (final (prefix, label) in const [

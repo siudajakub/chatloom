@@ -96,8 +96,8 @@ bool conversationNeedsPublicRead(
 /// message, and only a read marker at or past it clears that count.
 ///
 /// Events come from [loaded] (any order) and the room preview. A failed own
-/// send reads nothing. A receipt whose event is not loaded is compared by
-/// its timestamp, as the SDK's `hasNewMessages` does.
+/// send reads nothing. A receipt can reach past the preview only if the
+/// referenced event has a known position.
 bool conversationSourceUnread(Room room, {Iterable<Event> loaded = const []}) {
   final own = room.client.userID;
   final events = <String, Event>{};
@@ -132,7 +132,7 @@ bool conversationSourceUnread(Room room, {Iterable<Event> loaded = const []}) {
       if (eventId == null) return false;
       if (eventId == unread.eventId) return true;
       final event = events[eventId];
-      return event != null && position(event) >= cutoff;
+      return event != null && position(event) > cutoff;
     }
 
     if (events.values.any(
@@ -147,15 +147,11 @@ bool conversationSourceUnread(Room room, {Iterable<Event> loaded = const []}) {
         readsPast(PersonalPrivacy.readCutoff(room))) {
       return true;
     }
-    final receipts = room.receiptState;
-    for (final timeline in [receipts.global, ?receipts.mainThread]) {
-      for (final receipt in [timeline.ownPublic, timeline.ownPrivate]) {
-        if (receipt == null) continue;
-        if (events.containsKey(receipt.eventId)
-            ? readsPast(receipt.eventId)
-            : receipt.ts >= unread.originServerTs.millisecondsSinceEpoch) {
-          return true;
-        }
+    for (final receipt in room.receiptState.ownMainTimelineReceipts) {
+      if (readsPast(receipt.eventId) ||
+          (!events.containsKey(receipt.eventId) &&
+              (receipt.eventOriginServerTs ?? cutoff) > cutoff)) {
+        return true;
       }
     }
     return false;
@@ -196,32 +192,46 @@ Future<String?> newestServerEventId(Room room) async {
   return fallback?.eventId;
 }
 
-/// Sends one manual read marker per target, all sources in parallel, and
-/// returns how many failed. [publicReceipt] makes the receipt public even
+/// Sends one manual read marker per target, then clears its account-wide
+/// manual unread flag. [clearUnreadIn] also clears flags in rooms that have
+/// no marker to send. Sources run in parallel and the result counts failures.
+/// [publicReceipt] makes the receipt public even
 /// when public receipts are off (the incognito read button's explicit
 /// choice); [privateReceipt] keeps it private even when they are on (the
-/// incognito notification action, CS-32); otherwise the receipt follows the
-/// user's receipt setting.
+/// incognito notification action, CS-32) and leaves manual flags alone because
+/// some bridges forward that account data to their network. Otherwise the
+/// receipt follows the user's receipt setting.
 Future<int> markConversationRead(
   List<(Room, String)> targets, {
+  Iterable<Room> clearUnreadIn = const [],
   bool publicReceipt = false,
   bool privateReceipt = false,
 }) async {
+  final sources = <Room, String?>{
+    if (!privateReceipt)
+      for (final room in clearUnreadIn)
+        if (room.markedUnread) room: null,
+    for (final (room, eventId) in targets) room: eventId,
+  };
   var failed = 0;
   await Future.wait(
-    targets.map((target) async {
-      final (room, eventId) = target;
+    sources.entries.map((source) async {
+      final MapEntry(key: room, value: eventId) = source;
+      final clearManualFlag = !privateReceipt && room.markedUnread;
       try {
         if (room.client.baseUri == null) {
           throw StateError('Read target unavailable');
         }
-        await PersonalPrivacy.markRead(
-          room,
-          eventId,
-          manual: true,
-          publicReceipt: publicReceipt,
-          privateReceipt: privateReceipt,
-        );
+        if (eventId != null) {
+          await PersonalPrivacy.markRead(
+            room,
+            eventId,
+            manual: true,
+            publicReceipt: publicReceipt,
+            privateReceipt: privateReceipt,
+          );
+        }
+        if (clearManualFlag && room.markedUnread) await room.markUnread(false);
       } catch (_) {
         failed++;
       }

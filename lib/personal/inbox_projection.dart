@@ -225,18 +225,41 @@ class InboxProjection {
   String metadataKey(Room room) => 'org:${entityFor(room)}';
 
   /// Private synced key of "Move down" on an unread chat: `{until: ms}`,
-  /// the inbox time ([InboxRecord.lastActivity]) of the newest message it
+  /// the server time of the newest preview event it
   /// covered. (`unanswered-moved:` belonged to the retired unanswered rule
   /// and is no longer read.)
   static String movedDownKey(String entity) => 'moved-down:$entity';
 
-  /// Whether the user moved [entity] down while [activity] was its inbox
-  /// time; a newer message raises it again.
-  bool movedDown(String entity, DateTime? activity) {
+  /// Whether the user moved [entity] down. Only confirmed newer activity
+  /// raises it again. An unresolved preview has no reliable timestamp.
+  bool _movedDown(String entity, Iterable<Event> events) {
     final until = personal.values[movedDownKey(entity)]?['until'];
-    return activity != null &&
-        until is int &&
-        activity.millisecondsSinceEpoch <= until;
+    if (until is! int || until <= 0) return false;
+    final activity = _confirmedActivity(events);
+    return activity == null || activity.millisecondsSinceEpoch <= until;
+  }
+
+  /// A shared cutoff must come from a server event. A local echo or a
+  /// placeholder can have a different timestamp on every device.
+  DateTime? moveDownActivity(Room room) {
+    final group = groupFor(room);
+    return _confirmedActivity(
+      (group == null ? [room] : activeSourcesOf(group)).map((r) => r.lastEvent),
+    );
+  }
+
+  DateTime? _confirmedActivity(Iterable<Event?> events) {
+    DateTime? latest;
+    for (final event in events) {
+      if (event == null ||
+          event.status != EventStatus.synced ||
+          !personal.client.roomPreviewLastEvents.contains(event.type)) {
+        continue;
+      }
+      final time = activityTime(event)!;
+      if (latest == null || time.isAfter(latest)) latest = time;
+    }
+    return latest;
   }
 
   ConversationMetadata metadataFor(Room room) =>
@@ -536,7 +559,7 @@ class InboxProjection {
                 personal.conflicts.containsKey('draft:${r.id}'),
           ),
       unanswered: unanswered,
-      movedDown: movedDown(entity, lastActivity),
+      movedDown: _movedDown(entity, lastEvents),
       lastActivity: lastActivity,
     );
     return (record, representative);

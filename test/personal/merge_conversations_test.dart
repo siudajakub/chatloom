@@ -3,11 +3,7 @@
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/pages/chat_list/chat_actions_menu.dart';
 import 'package:chatloom/pages/chat_list/chat_list.dart'
-    show
-        chatMenuItems,
-        clearInboxMovedDown,
-        moveInboxRowDown,
-        moveInboxRowUp;
+    show chatMenuItems, clearInboxMovedDown, moveInboxRowDown, moveInboxRowUp;
 import 'package:chatloom/personal/inbox_projection.dart';
 import 'package:chatloom/personal/person_merge.dart';
 import 'package:chatloom/personal/personal_client.dart';
@@ -557,9 +553,12 @@ void main() {
       'Ignore chat',
     ]);
     expect(
-      chatMenuItems(personal, signal, pinLabel: 'Pin', unpinLabel: 'Unpin')
-          .singleWhere((i) => i.action == ChatMenuAction.moveDown)
-          .enabled,
+      chatMenuItems(
+        personal,
+        signal,
+        pinLabel: 'Pin',
+        unpinLabel: 'Unpin',
+      ).singleWhere((i) => i.action == ChatMenuAction.moveDown).enabled,
       isTrue,
     );
 
@@ -620,9 +619,12 @@ void main() {
     // Without private sync the row stays visible but disabled.
     personal.available = false;
     expect(
-      chatMenuItems(personal, signal, pinLabel: 'Pin', unpinLabel: 'Unpin')
-          .singleWhere((i) => i.action == ChatMenuAction.moveDown)
-          .enabled,
+      chatMenuItems(
+        personal,
+        signal,
+        pinLabel: 'Pin',
+        unpinLabel: 'Unpin',
+      ).singleWhere((i) => i.action == ChatMenuAction.moveDown).enabled,
       isFalse,
     );
     personal.available = true;
@@ -642,6 +644,36 @@ void main() {
     personal.writes.clear();
     await clearInboxMovedDown(personal, signal.id);
     expect(personal.writes, isEmpty);
+  });
+
+  test('Move down survives a different preview on a receiving device', () {
+    final message = signal.lastEvent!;
+    personal.values[InboxProjection.movedDownKey(signal.id)] = {
+      'until': message.originServerTs.millisecondsSinceEpoch,
+    };
+    signal.notificationCount = 1;
+    signal.lastEvent = Event(
+      room: signal,
+      type: EventTypes.refreshingLastEvent,
+      eventId: '\$local-placeholder',
+      senderId: _owner,
+      originServerTs: message.originServerTs.add(const Duration(minutes: 8)),
+      content: {},
+    );
+    final projection = InboxProjection(personal);
+    expect(projection.moveDownActivity(signal), isNull);
+    expect(projection.recordFor(signal).movedDown, isTrue);
+    expect(projection.recordFor(signal).unread, isTrue);
+
+    signal.lastEvent = Event(
+      room: signal,
+      type: EventTypes.Message,
+      eventId: '\$new-server-message',
+      senderId: _peer,
+      originServerTs: message.originServerTs.add(const Duration(minutes: 1)),
+      content: {'msgtype': MessageTypes.Text, 'body': 'Fictional'},
+    );
+    expect(projection.recordFor(signal).movedDown, isFalse);
   });
 
   test('Move down covers a merged person until any of its chats gets a '

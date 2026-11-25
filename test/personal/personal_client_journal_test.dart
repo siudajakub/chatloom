@@ -1010,7 +1010,7 @@ void main() {
     expect(changes, 1);
   });
 
-  group('merged persons resync', () {
+  group('inbox metadata resync', () {
     Event liveHeartbeat(_Journal room, Map<String, dynamic> payload) => _op(
       room,
       'hb-live',
@@ -1020,12 +1020,22 @@ void main() {
     );
 
     test(
-      'a device asks a capable worker once for the stored persons',
+      'a device refreshes the extended scope after a legacy resync',
       () async {
         final store = _Store();
         final journal = _Journal();
         journal.history
           ..add(_create(journal))
+          ..add(
+            _op(
+              journal,
+              'legacy-resync',
+              _min(1),
+              'metadata.resync.result',
+              entity: PersonalClient.resyncEntity,
+              payload: {'state': 'done', 'revision': 0},
+            ),
+          )
           ..add(liveHeartbeat(journal, {'metadataResync': 1}));
         final personal = _start(client, store, journal);
         addTearDown(personal.dispose);
@@ -1037,7 +1047,11 @@ void main() {
             .toList();
         expect(asked, hasLength(1));
         expect(asked.single.entityId, PersonalClient.resyncEntity);
-        expect(asked.single.payload['prefixes'], PersonalClient.resyncPrefixes);
+        expect(asked.single.payload['prefixes'], [
+          'person:',
+          'person-prefs:',
+          'moved-down:',
+        ]);
         // While it waits, another request is not staged.
         expect(await personal.requestMetadataResync(), isFalse);
         expect(
@@ -1046,7 +1060,7 @@ void main() {
             PersonalClient.resyncEntity,
             operation: asked.single,
           ),
-          'Refresh merged conversations',
+          'Refresh inbox settings',
         );
       },
     );

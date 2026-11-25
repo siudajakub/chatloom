@@ -14,11 +14,10 @@ import 'package:matrix/matrix.dart';
 /// ([loadedEvents]) or the preview, never a local echo; a source with
 /// nothing to mark is skipped ([conversationReadTargets]).
 ///
-/// Shown only while a source is actually unread
+/// Shown while a source is manually flagged or actually unread
 /// ([conversationSourceUnread]): the user's own message or reaction, a read
 /// receipt or the fully read marker at or after the newest message from
-/// someone else hides it; bridge delivery reports and other hidden events
-/// never show it.
+/// someone else hides it. A manual flag alone can be cleared without a receipt.
 class ConversationReadButton extends StatefulWidget {
   final List<Room> rooms;
 
@@ -51,8 +50,9 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
     // The parent rebuilds on every timeline change; keep the subscriptions
     // unless the sources changed.
     if (oldWidget.rooms.length != widget.rooms.length ||
-        Iterable<int>.generate(widget.rooms.length)
-            .any((i) => !identical(oldWidget.rooms[i], widget.rooms[i]))) {
+        Iterable<int>.generate(
+          widget.rooms.length,
+        ).any((i) => !identical(oldWidget.rooms[i], widget.rooms[i]))) {
       _listen();
     }
   }
@@ -100,15 +100,25 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
         ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
-    var targets = conversationReadTargets(
-      widget.rooms,
-      loaded: widget.loadedEvents,
-    );
+    final rooms = widget.rooms;
+    final unread = rooms
+        .where(
+          (room) => conversationSourceUnread(
+            room,
+            loaded: widget.loadedEvents?.call(room) ?? const [],
+          ),
+        )
+        .toList();
+    var targets = conversationReadTargets(unread, loaded: widget.loadedEvents);
     final counted = [
-      for (final room in widget.rooms)
+      for (final room in unread)
         if (room.notificationCount > 0) room,
     ];
-    if (targets.isEmpty && counted.isEmpty) return;
+    if (targets.isEmpty &&
+        counted.isEmpty &&
+        !rooms.any((r) => r.markedUnread)) {
+      return;
+    }
     setState(() => _sending = true);
     try {
       // A counted chat needs its newest server event of any kind: the
@@ -123,9 +133,12 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
           for (final MapEntry(key: room, value: id) in newest.entries)
             if (id != null) (room, id),
         ];
-        if (targets.isEmpty) return;
       }
-      final failed = await markConversationRead(targets, publicReceipt: true);
+      final failed = await markConversationRead(
+        targets,
+        clearUnreadIn: rooms,
+        publicReceipt: true,
+      );
       if (failed > 0) throw StateError('Read marker not confirmed');
     } catch (_) {
       if (mounted) {
@@ -146,6 +159,7 @@ class _ConversationReadButtonState extends State<ConversationReadButton> {
   Widget build(BuildContext context) {
     final needed =
         _sending ||
+        widget.rooms.any((room) => room.markedUnread) ||
         conversationNeedsPublicRead(widget.rooms, loaded: widget.loadedEvents);
     if (!needed) return const SizedBox.shrink();
     return Padding(

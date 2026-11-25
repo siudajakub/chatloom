@@ -99,6 +99,10 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
   // down; a moved one offers to move back up until its next message.
   final movable = unread && !pinned && !metadata.muted;
   final movedDown = movable && projection.recordFor(room).movedDown;
+  final canMove =
+      joined &&
+      owner.ready &&
+      !owner.conflicts.containsKey(InboxProjection.movedDownKey(entity));
   return [
     unread
         ? ChatMenuItem(
@@ -125,13 +129,13 @@ List<ChatMenuItem<ChatMenuAction>> chatMenuItems(
               ChatMenuAction.moveUp,
               Icons.vertical_align_top,
               'Move up',
-              enabled: joined && owner.ready,
+              enabled: canMove,
             )
           : ChatMenuItem(
               ChatMenuAction.moveDown,
               Icons.low_priority,
               'Move down',
-              enabled: joined && owner.ready,
+              enabled: canMove && projection.moveDownActivity(room) != null,
             ),
     metadata.muted
         ? ChatMenuItem(
@@ -225,7 +229,6 @@ Future<void> markInboxRowRead(
     if (source.membership != Membership.join || !personalRoomUnread(source)) {
       continue;
     }
-    if (source.markedUnread) await source.markUnread(false);
     // A chat ChatLoom silences on the server has no count (push_rule_mirror).
     // A counted chat needs its newest event of any kind: a reaction to the
     // user's message counts but never becomes the preview.
@@ -242,6 +245,7 @@ Future<void> markInboxRowRead(
         privateReceipt: privateReceipt,
       );
     }
+    if (source.markedUnread) await source.markUnread(false);
   }
 }
 
@@ -1059,10 +1063,7 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         // (NotionListMotion); it keeps its unread count and highlight.
         final projection = InboxProjection(personal);
         final target = projection.entityFor(room);
-        final activity = _latestActivity(
-          projection.recordFor(room).lastActivity,
-          inbox.index.recordFor(room)?.lastActivity,
-        );
+        final activity = projection.moveDownActivity(room);
         if (activity == null) return;
         final previous =
             personal.values[InboxProjection.movedDownKey(target)]?['until'];
@@ -1092,12 +1093,6 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
         return;
     }
   }
-
-  /// The later of two inbox times of one row: the fresh record and the
-  /// shown index may disagree while a technical event keeps the shown time,
-  /// and "Move down" must cover both.
-  static DateTime? _latestActivity(DateTime? a, DateTime? b) =>
-      a == null || (b != null && b.isAfter(a)) ? b : a;
 
   /// The swipe sides of an inbox row (UX-14, Telegram). By default a swipe
   /// towards the start moves an eligible unread chat down or up, archives a
@@ -1381,28 +1376,29 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     }
 
     change().then((_) {
-      if (_sameInbox(owner, account)) _refreshInbox();
+      if (!_sameInbox(owner, account)) return;
+      _refreshInbox();
+      if (done == null) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            persist: false,
+            content: Text(done),
+            action: undo == null
+                ? null
+                : SnackBarAction(
+                    label: 'Undo',
+                    onPressed: () {
+                      if (!_sameInbox(owner, account)) return;
+                      undo().then((_) {
+                        if (_sameInbox(owner, account)) _refreshInbox();
+                      }, onError: failed);
+                    },
+                  ),
+          ),
+        );
     }, onError: failed);
-    if (done == null) return;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          persist: false,
-          content: Text(done),
-          action: undo == null
-              ? null
-              : SnackBarAction(
-                  label: 'Undo',
-                  onPressed: () {
-                    if (!_sameInbox(owner, account)) return;
-                    undo().then((_) {
-                      if (_sameInbox(owner, account)) _refreshInbox();
-                    }, onError: failed);
-                  },
-                ),
-        ),
-      );
   }
 
   bool _sameInbox(PersonalClient owner, String account) =>

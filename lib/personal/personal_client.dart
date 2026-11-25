@@ -2259,19 +2259,24 @@ class PersonalClient extends ChangeNotifier {
     }
   }
 
-  // ── Merged persons again from the worker (2026-10-26) ──────────────────
+  // ── Inbox metadata recovery ───────────────────────────────────────────
   // Another device's change reaches this one only as the worker's result.
   // A result this device could never decrypt or trust (it was added later,
-  // or got the keys only from backup) was settled for good, so merged
-  // persons differed between devices. `metadata.resync` asks the worker to
+  // or got the keys only from backup) can be settled without being applied.
+  // `metadata.resync` asks the worker to
   // publish its stored state again in the current session.
 
   /// Metadata prefixes whose state [requestMetadataResync] asks for.
-  static const resyncPrefixes = ['person:', 'person-prefs:'];
+  static const resyncPrefixes = ['person:', 'person-prefs:', 'moved-down:'];
 
-  /// Entity of the resync command; its record also marks that this device
-  /// asked once already.
+  /// Entity of the resync command.
   static const resyncEntity = 'resync';
+
+  // A local marker because the account-wide resync result may have come
+  // from another device or from before moved-down was included.
+  static const _resyncScopeKey = 'inbox-resync-scope';
+  bool? _requestedCurrentResyncScope;
+  bool _startingResync = false;
 
   /// Shortest gap between two automatic resyncs after lost results.
   static const resyncInterval = Duration(hours: 6);
@@ -2279,7 +2284,7 @@ class PersonalClient extends ChangeNotifier {
   bool _lostWorkerResults = false;
   DateTime? _lastResyncAt;
 
-  /// Whether the worker can publish the merged persons again.
+  /// Whether the worker can publish stored inbox metadata again.
   bool get canResyncMetadata =>
       workerOnline && workerReadiness?.metadataResync == true;
 
@@ -2361,19 +2366,35 @@ class PersonalClient extends ChangeNotifier {
     await command(deviceTrustKind, 'device:$deviceId', {'deviceId': deviceId});
   }
 
-  /// Asks the worker to publish the stored merged persons again. Returns
+  /// Asks the worker to publish saved merges and inbox order again. Returns
   /// false when the worker cannot (offline or older) or a request already
   /// waits for it.
   Future<bool> requestMetadataResync() async {
-    if (_disposed || !canResyncMetadata || _resyncPending) return false;
-    _lastResyncAt = DateTime.now();
+    if (_disposed || !canResyncMetadata || _resyncPending || _startingResync) {
+      return false;
+    }
+    _startingResync = true;
+    final hadLostResults = _lostWorkerResults;
     _lostWorkerResults = false;
     try {
       await command('metadata.resync', resyncEntity, {
         'prefixes': resyncPrefixes,
       });
+      _lastResyncAt = DateTime.now();
+      _requestedCurrentResyncScope = true;
+      try {
+        await writeLocalRecord(_resyncScopeKey, {'movedDown': true});
+      } catch (_) {
+        // The request is already durable. A later launch can safely repeat it.
+      }
     } on StateError {
+      _lostWorkerResults = _lostWorkerResults || hadLostResults;
       return false;
+    } catch (_) {
+      _lostWorkerResults = _lostWorkerResults || hadLostResults;
+      rethrow;
+    } finally {
+      _startingResync = false;
     }
     return true;
   }
@@ -2382,14 +2403,17 @@ class PersonalClient extends ChangeNotifier {
   /// replay settled worker results this device can never apply, at most
   /// once per [resyncInterval].
   Future<void> _resyncIfNeeded() async {
-    if (!canResyncMetadata || _resyncPending) return;
-    final never = !revisions.containsKey(resyncEntity);
-    final last = _lastResyncAt;
-    final due =
-        _lostWorkerResults &&
-        (last == null || DateTime.now().difference(last) >= resyncInterval);
-    if (!never && !due) return;
+    if (!canResyncMetadata || _resyncPending || _startingResync) return;
     try {
+      if (_requestedCurrentResyncScope == null) {
+        final scope = await readLocalRecord(_resyncScopeKey);
+        _requestedCurrentResyncScope ??= scope?['movedDown'] == true;
+      }
+      final last = _lastResyncAt;
+      final due =
+          _lostWorkerResults &&
+          (last == null || DateTime.now().difference(last) >= resyncInterval);
+      if (_requestedCurrentResyncScope == true && !due) return;
       await requestMetadataResync();
     } catch (_) {
       // Retried after the next replay; sync status shows a lasting failure.

@@ -15,9 +15,50 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../notion/conversation_test_support.dart';
 
+class _Database extends ConversationDatabase {
+  Completer<void>? transactionGate;
+
+  @override
+  Future<void> transaction(Future<void> Function() action) async {
+    await transactionGate?.future;
+    await action();
+  }
+}
+
 class _Client extends ConversationClient {
   @override
+  final database = _Database();
+
+  final unreadWrites = <bool>[];
+  Completer<void>? unreadGate;
+  bool failUnread = false;
+
+  @override
   Uri get baseUri => Uri.parse('https://fixture.invalid');
+
+  @override
+  Future<void> setAccountDataPerRoom(
+    String userId,
+    String roomId,
+    String type,
+    Map<String, Object?> body,
+  ) async {
+    expect(type, 'm.marked_unread');
+    unreadWrites.add(body['unread'] as bool);
+    if (failUnread) throw StateError('Offline fixture');
+    await unreadGate?.future;
+  }
+
+  @override
+  Future<void> handleSync(SyncUpdate sync, {Direction? direction}) async {
+    for (final entry in sync.rooms!.join!.entries) {
+      final room = getRoomById(entry.key)!;
+      for (final event in entry.value.accountData ?? <BasicEvent>[]) {
+        room.roomAccountData[event.type] = event;
+      }
+    }
+    onSync.add(sync);
+  }
 }
 
 class _Room extends ConversationRoom {
@@ -186,6 +227,102 @@ void main() {
     // Automatic reads remain suppressed after the manual action.
     await PersonalPrivacy.markRead(room, r'$two', publicReceipt: true);
     expect(room.receipts, hasLength(1));
+  });
+
+  test('an explicitly private read leaves the manual flag alone', () async {
+    final client = _Client();
+    final room = _Room(client, '!fixture:example.invalid')..incoming(r'$one');
+    await room.markUnread(true);
+    final failed = await markConversationRead(
+      [(room, r'$one')],
+      clearUnreadIn: [room],
+      privateReceipt: true,
+    );
+    expect(failed, 0);
+    expect(room.markedUnread, isTrue);
+    expect(client.unreadWrites, [true]);
+    expect(room.receipts, [(r'$one', r'$one', false)]);
+  });
+
+  test(
+    'manual unread writes can retry and overlapping writes run in order',
+    () async {
+      final client = _Client()..failUnread = true;
+      final room = _Room(client, '!fixture:example.invalid');
+      await expectLater(room.markUnread(true), throwsStateError);
+      expect(room.markedUnread, isFalse);
+
+      final gate = Completer<void>();
+      client
+        ..failUnread = false
+        ..unreadGate = gate;
+      final markUnread = room.markUnread(true);
+      final markRead = room.markUnread(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(client.unreadWrites, [true, true]);
+      expect(room.markedUnread, isFalse);
+      gate.complete();
+      await Future.wait([markUnread, markRead]);
+      expect(client.unreadWrites, [true, true, false]);
+      expect(room.markedUnread, isFalse);
+    },
+  );
+
+  test('a room sync can supersede a confirmed local unread write', () async {
+    final client = _Client();
+    final room = _Room(client, '!fixture:example.invalid');
+    final transaction = client.database.transactionGate = Completer<void>();
+    final write = room.markUnread(true);
+    await Future<void>.delayed(Duration.zero);
+    expect(client.unreadWrites, [true]);
+    room.roomAccountData['m.marked_unread'] = BasicEvent(
+      type: 'm.marked_unread',
+      content: {'unread': false},
+    );
+    transaction.complete();
+    await write;
+    expect(room.markedUnread, isFalse);
+  });
+
+  testWidgets('a manual unread flag clears without a public receipt', (
+    tester,
+  ) async {
+    final client = _Client();
+    final room = _Room(client, '!fixture:example.invalid')..incoming(r'$one');
+    room.roomAccountData['m.fully_read'] = BasicEvent(
+      type: 'm.fully_read',
+      content: {'event_id': r'$one'},
+    );
+    await room.markUnread(true);
+    await _mount(tester, [room]);
+    await tester.tap(find.byType(ConversationReadButton));
+    await tester.pumpAndSettle();
+    expect(client.unreadWrites, [true, false]);
+    expect(room.markedUnread, isFalse);
+    expect(room.receipts, isEmpty);
+    expect(find.byType(NotionGlassPill), findsNothing);
+  });
+
+  testWidgets('the flag stays until an explicit read marker succeeds', (
+    tester,
+  ) async {
+    final client = _Client();
+    final room = _Room(client, '!fixture:example.invalid')
+      ..incoming(r'$one')
+      ..fail = true;
+    await room.markUnread(true);
+    await _mount(tester, [room]);
+    await tester.tap(find.byType(ConversationReadButton));
+    await tester.pumpAndSettle();
+    expect(client.unreadWrites, [true]);
+    expect(room.markedUnread, isTrue);
+
+    room.fail = false;
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(client.unreadWrites, [true, false]);
+    expect(room.markedUnread, isFalse);
+    expect(room.receipts, [(r'$one', r'$one', true), (r'$one', r'$one', true)]);
   });
 
   testWidgets('accepted reaction hides read button until another message', (
@@ -484,11 +621,32 @@ void main() {
       // Read on another device; the receipt points past the message.
       room.receiptState = _ownPublic(r'$status', 3);
       expect(conversationSourceUnread(room, loaded: loaded), isFalse);
-      // Only the preview is known: the receipt time decides.
-      expect(conversationSourceUnread(room), isFalse);
-      room.receiptState = _ownPublic(r'$unknown', 1);
+      // The receipt's send time cannot prove a position on its own.
       expect(conversationSourceUnread(room), isTrue);
+      room.receiptState.global.ownPublic!.eventOriginServerTs =
+          loaded.first.originServerTs.millisecondsSinceEpoch;
+      expect(conversationSourceUnread(room), isFalse);
     });
+
+    test(
+      'a late receipt for an older push leaves the newer preview unread',
+      () {
+        final room = _Room(_Client(), '!fixture:example.invalid');
+        room.latest = _event(room, r'$newer', sender: _anna, minute: 2);
+        room.receiptState = _ownPublic(r'$old-push', 3);
+        expect(conversationSourceUnread(room), isTrue);
+        expect(room.hasNewMessages, isTrue);
+        room.receiptState.global.ownPublic!.eventOriginServerTs = DateTime.utc(
+          2026,
+          10,
+          21,
+          0,
+          1,
+        ).millisecondsSinceEpoch;
+        expect(conversationSourceUnread(room), isTrue);
+        expect(room.hasNewMessages, isTrue);
+      },
+    );
 
     test('the fully read marker reads the conversation', () {
       final room = _Room(_Client(), '!fixture:example.invalid')

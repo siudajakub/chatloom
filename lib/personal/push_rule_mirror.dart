@@ -140,9 +140,8 @@ bool chatLoomSilencedUnread(Room room) {
   try {
     return (chatLoomSilencedRooms(room.client).contains(room.id) ||
             beeperMuted(room)) &&
-        // The SDK's hasNewMessages compares receipt timestamps, which may
-        // still be absent after restoring the database. The persisted fully
-        // read marker (and a read made on this device) remains authoritative.
+        // Account data and locally applied reads are also available when
+        // the ephemeral receipt has yet to sync.
         PersonalPrivacy.hasUnread(room);
   } catch (_) {
     return false;

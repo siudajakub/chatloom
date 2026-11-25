@@ -1034,7 +1034,7 @@ void main() {
       expect(store.metadata('people:test')!['revision'], 2);
     },
   );
-  test('metadata.resync publishes stored persons again, tombstones too', () {
+  test('metadata.resync republishes inbox metadata and tombstones', () {
     engine.accept(
       op('a', 'metadata.put', 'person:a', {
         'value': {'name': 'A'},
@@ -1047,6 +1047,11 @@ void main() {
     );
     engine.accept(op('b-del', 'metadata.delete', 'person:b', {}, revision: 1));
     engine.accept(
+      op('moved', 'metadata.put', 'moved-down:person:a', {
+        'value': {'until': 1795536000000},
+      }),
+    );
+    engine.accept(
       op('n', 'metadata.put', 'nickname:x', {
         'value': {'name': 'N'},
       }),
@@ -1054,11 +1059,12 @@ void main() {
     final before = store.outbox.length;
     engine.accept(
       op('sync', 'metadata.resync', 'resync', {
-        'prefixes': ['person:'],
+        'prefixes': ['person:', 'person-prefs:', 'moved-down:'],
       }),
     );
     final published = store.outbox.skip(before).toList();
     expect(published.map((e) => e['kind']), [
+      'metadata.result',
       'metadata.result',
       'metadata.result',
       'metadata.resync.result',
@@ -1071,15 +1077,18 @@ void main() {
     expect(b['entityId'], 'person:b');
     expect(b['payload']['deleted'], isTrue);
     expect(b['payload']['revision'], 2);
-    expect(published[2]['payload']['acceptedOpId'], 'sync');
-    expect(published[2]['payload']['count'], 2);
+    final moved = published[2];
+    expect(moved['entityId'], 'moved-down:person:a');
+    expect(moved['payload']['value'], {'until': 1795536000000});
+    expect(published[3]['payload']['acceptedOpId'], 'sync');
+    expect(published[3]['payload']['count'], 3);
     // A second resync gets fresh result ids (devices dedupe by result id).
     engine.accept(
       op('sync2', 'metadata.resync', 'resync', {
         'prefixes': ['person:'],
       }),
     );
-    expect(store.outbox.map((e) => e['opId']).toSet(), hasLength(before + 6));
+    expect(store.outbox.map((e) => e['opId']).toSet(), hasLength(before + 7));
   });
   test('metadata.resync rejects malformed prefixes', () {
     for (final payload in [

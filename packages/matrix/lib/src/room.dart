@@ -843,8 +843,8 @@ class Room {
   }
 
   /// Checks if the last event has a read marker of the user.
-  /// Warning: This compares the origin server timestamp which might not map
-  /// to the real sort order of the timeline.
+  /// For a different known event, its origin timestamp approximates the
+  /// timeline order. An unknown receipt target leaves the preview unread.
   bool get hasNewMessages {
     final lastEvent = this.lastEvent;
 
@@ -855,19 +855,13 @@ class Room {
       return false;
     }
 
-    // Read marker is on the last event so no new messages.
-    if (lastEvent.receipts.any(
-      (receipt) => receipt.user.senderId == client.userID!,
-    )) {
-      return false;
-    }
-
-    // If the last event is sent, we mark the room as read.
     if (lastEvent.senderId == client.userID) return false;
-
-    // Get the timestamp of read marker and compare
-    final readAtMilliseconds = receiptState.global.latestOwnReceipt?.ts ?? 0;
-    return readAtMilliseconds < lastEvent.originServerTs.millisecondsSinceEpoch;
+    final origin = lastEvent.originServerTs.millisecondsSinceEpoch;
+    return !receiptState.ownMainTimelineReceipts.any(
+      (receipt) =>
+          receipt.eventId == lastEvent.eventId ||
+          (receipt.eventOriginServerTs ?? origin) > origin,
+    );
   }
 
   LatestReceiptState receiptState;
@@ -889,38 +883,69 @@ class Room {
     return await client.waitForRoomInSync(id);
   }
 
-  /// Sets an unread flag manually for this room. This changes the local account
-  /// data model before syncing it to make sure
-  /// this works if there is no connection to the homeserver. This does **not**
-  /// set a read marker!
+  Future<void>? _markingUnread;
+
+  /// Sets the account-wide manual unread flag without setting a read marker.
+  /// Apply the local change after the homeserver accepts it so an offline
+  /// failure remains visible and can be retried.
   Future<void> markUnread(bool unread) async {
-    if (unread == markedUnread) return;
+    final userId = client.userID;
+    final previous = _markingUnread;
+    final change = () async {
+      try {
+        await previous;
+      } catch (_) {
+        // A failed write must not prevent the latest action from running.
+      }
+      if (userId == null || client.userID != userId) {
+        throw StateError('The room account is no longer available');
+      }
+      await _setMarkedUnread(userId, unread);
+    }();
+    _markingUnread = change;
+    try {
+      await change;
+    } finally {
+      if (identical(_markingUnread, change)) _markingUnread = null;
+    }
+  }
+
+  Future<void> _setMarkedUnread(String userId, bool unread) async {
     if (membership != Membership.join) {
       throw Exception(
         'Can not markUnread on a room with membership $membership',
       );
     }
     final content = MarkedUnread(unread).toJson();
-    await _handleFakeSync(
-      SyncUpdate(
-        nextBatch: '',
-        rooms: RoomsUpdate(
-          join: {
-            id: JoinedRoomUpdate(
-              accountData: [
-                BasicEvent(content: content, type: EventType.markedUnread),
-              ],
-            ),
-          },
-        ),
-      ),
-    );
+    final previous = roomAccountData[EventType.markedUnread];
     await client.setAccountDataPerRoom(
-      client.userID!,
+      userId,
       id,
       EventType.markedUnread,
       content,
     );
+    await client.database.transaction(() async {
+      if (unread == markedUnread ||
+          client.userID != userId ||
+          membership != Membership.join ||
+          !identical(previous, roomAccountData[EventType.markedUnread])) {
+        return;
+      }
+      await client.handleSync(
+        SyncUpdate(
+          nextBatch: '',
+          rooms: RoomsUpdate(
+            join: {
+              id: JoinedRoomUpdate(
+                accountData: [
+                  BasicEvent(content: content, type: EventType.markedUnread),
+                ],
+              ),
+            },
+          ),
+        ),
+      );
+    });
   }
 
   /// Returns true if this room has a m.favourite tag.

@@ -151,6 +151,49 @@ void main() {
 
   for (final merged in [false, true]) {
     testWidgets(
+      '${merged ? "merged" : "ordinary"} composer refreshes an untouched draft',
+      (tester) async {
+        final client = ConversationClient();
+        final a = ConversationRoom(client, '!draft-a:example.invalid');
+        final b = ConversationRoom(client, '!draft-b:example.invalid');
+        final personal = ConversationPersonal(client);
+        PersonalClient.debugUse(client, personal);
+        addTearDown(personal.dispose);
+        final person = _group(personal, a, b);
+        final key = merged ? 'draft:person:${person.id}' : 'draft:${a.id}';
+        void remoteDraft(String text) {
+          personal.values[key] = {
+            'text': text,
+            'target': SendTarget(conversation: personal.ref(a)).toJson(),
+          };
+          personal.notifyListeners();
+        }
+
+        remoteDraft('First draft');
+        await _mount(
+          tester,
+          merged
+              ? MergedChatPage(personal: personal, group: person)
+              : ChatPageWithRoom(room: a),
+          client,
+        );
+        expect(_editorText(tester), 'First draft');
+        remoteDraft('Updated elsewhere');
+        await tester.pump();
+        expect(_editorText(tester), 'Updated elsewhere');
+        remoteDraft('');
+        await tester.pump();
+        expect(_editorText(tester), isEmpty);
+
+        await _type(tester, 'Typing here');
+        remoteDraft('Another device');
+        await tester.pump();
+        expect(_editorText(tester), 'Typing here');
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
       '${merged ? "merged" : "ordinary"} dictation accepts an already delivered outbox attempt once',
       (tester) async {
         final client = ConversationClient();
