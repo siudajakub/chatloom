@@ -51,16 +51,28 @@ class BoxCollection with ZoneTransactionMixin {
 
   Batch? _activeBatch;
 
+  /// Transactions started and not yet committed. While any is open, cached
+  /// values may be newer than the database, so boxes must not evict them.
+  int _openTransactions = 0;
+
+  /// Whether a box may drop cached values (nothing uncommitted is pending).
+  bool get _canEvict => _activeBatch == null && _openTransactions == 0;
+
   Future<void> transaction(
     Future<void> Function() action, {
     List<String>? boxNames,
     bool readOnly = false,
   }) => zoneTransaction(() async {
-    final batch = _db.batch();
-    _activeBatch = batch;
-    await action();
-    _activeBatch = null;
-    await batch.commit(noResult: true);
+    _openTransactions++;
+    try {
+      final batch = _db.batch();
+      _activeBatch = batch;
+      await action();
+      _activeBatch = null;
+      await batch.commit(noResult: true);
+    } finally {
+      _openTransactions--;
+    }
   });
 
   Future<void> clear() => transaction(() async {
@@ -84,7 +96,50 @@ class BoxCollection with ZoneTransactionMixin {
 class Box<V> {
   final String name;
   final BoxCollection boxCollection;
+
+  /// Values read or written recently, in least-recently-used order (a
+  /// [LinkedHashMap]: oldest first). Bounded by [maxCachedValues]; upstream
+  /// kept every value ever read or written until logout, which grew a
+  /// long-running client by hundreds of MB (events, receipts, presences).
   final Map<String, V?> _quickAccessCache = {};
+
+  /// Most values kept in [_quickAccessCache]; older ones are read again
+  /// from the database when needed.
+  static int maxCachedValues = 2000;
+
+  void _touch(String key, V? value) {
+    _quickAccessCache.remove(key);
+    _quickAccessCache[key] = value;
+    _evict();
+  }
+
+  /// Drops the oldest values beyond [maxCachedValues] (with 10 % slack, so
+  /// it runs once per batch of inserts), but never while a transaction may
+  /// hold values that are not committed yet.
+  void _evict() {
+    final max = maxCachedValues;
+    if (_quickAccessCache.length <= max + max ~/ 10) return;
+    if (!boxCollection._canEvict) return;
+    final excess = _quickAccessCache.length - max;
+    final oldest = _quickAccessCache.keys.take(excess).toList();
+    for (final key in oldest) {
+      _quickAccessCache.remove(key);
+    }
+  }
+
+  /// Forgets a key set that outgrew [maxCachedValues] once no transaction
+  /// is open (inside one it may hold keys not committed yet).
+  void _dropLargeKeySet() {
+    final keys = _quickAccessCachedKeys;
+    if (keys != null &&
+        keys.length > maxCachedValues &&
+        boxCollection._canEvict) {
+      _quickAccessCachedKeys = null;
+    }
+  }
+
+  /// Tests: values cached now.
+  int get debugCachedValues => _quickAccessCache.length;
 
   /// _quickAccessCachedKeys is only used to make sure that if you fetch all keys from a
   /// box, you do not need to have an expensive read operation twice. There is
@@ -157,7 +212,9 @@ class Box<V> {
     final result = await executor.query(name, columns: ['k']);
     final keys = result.map((row) => row['k'] as String).toList();
 
-    _quickAccessCachedKeys = keys.toSet();
+    // ChatLoom: only small boxes keep their key set. For events or room
+    // members it would pin every key ever stored and grow with each write.
+    if (keys.length <= maxCachedValues) _quickAccessCachedKeys = keys.toSet();
     return keys;
   }
 
@@ -173,7 +230,11 @@ class Box<V> {
   }
 
   Future<V?> get(String key, [Transaction? txn]) async {
-    if (_quickAccessCache.containsKey(key)) return _quickAccessCache[key];
+    if (_quickAccessCache.containsKey(key)) {
+      final cached = _quickAccessCache.remove(key);
+      _quickAccessCache[key] = cached;
+      return cached;
+    }
 
     final executor = txn ?? boxCollection._db;
 
@@ -185,7 +246,8 @@ class Box<V> {
     );
 
     final value = result.isEmpty ? null : _fromString(result.single['v']);
-    _quickAccessCache[key] = value;
+    // A write during the query (another zone) is newer: keep it.
+    if (!_quickAccessCache.containsKey(key)) _touch(key, value);
     return value;
   }
 
@@ -223,7 +285,12 @@ class Box<V> {
     // `resultMap.values`.
     list.addAll(keys.map((key) => resultMap[key]));
 
-    _quickAccessCache.addAll(resultMap);
+    for (final entry in resultMap.entries) {
+      if (!_quickAccessCache.containsKey(entry.key)) {
+        _quickAccessCache[entry.key] = entry.value;
+      }
+    }
+    _evict();
 
     return list;
   }
@@ -242,8 +309,9 @@ class Box<V> {
       txn.insert(name, params, conflictAlgorithm: ConflictAlgorithm.replace);
     }
 
-    _quickAccessCache[key] = val;
+    _touch(key, val);
     _quickAccessCachedKeys?.add(key);
+    _dropLargeKeySet();
     return;
   }
 
@@ -258,7 +326,7 @@ class Box<V> {
 
     // Set to null instead remove() so that inside of transactions null is
     // returned.
-    _quickAccessCache[key] = null;
+    _touch(key, null);
     _quickAccessCachedKeys?.remove(key);
     return;
   }

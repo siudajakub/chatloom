@@ -214,6 +214,12 @@ class Encryption {
         // the entry should always exist. In the case it doesn't, the following
         // line *could* throw an error. As that is a future, though, and we call
         // it un-awaited here, nothing happens, which is exactly the result we want
+        // ChatLoom: the session stays in memory until the write lands, so a
+        // reload after eviction never misses this index.
+        final release = keyManager.holdInboundGroupSession(
+          event.room.id,
+          sessionId,
+        );
         client.database
             // ignore: discarded_futures
             .updateInboundGroupSessionIndexes(
@@ -222,7 +228,9 @@ class Encryption {
               sessionId,
             )
             // ignore: discarded_futures
-            .onError((e, _) => Logs().e('Ignoring error for updating indexes'));
+            .onError((e, _) => Logs().e('Ignoring error for updating indexes'))
+            // ignore: discarded_futures
+            .whenComplete(release);
       }
       decryptedPayload = json.decode(decryptResult.plaintext);
     } catch (exception) {
@@ -289,14 +297,23 @@ class Encryption {
       }
       final content = event.parsedRoomEncryptedContent;
       final sessionId = content.sessionId;
-      if (sessionId != null &&
-          !(keyManager
-                  .getInboundGroupSession(event.room.id, sessionId)
-                  ?.isValid ??
-              false)) {
-        await keyManager.loadInboundGroupSession(event.room.id, sessionId);
+      // ChatLoom: the bounded session cache must not drop the session between
+      // loading it and decrypting with it.
+      final release = sessionId == null
+          ? null
+          : keyManager.holdInboundGroupSession(event.room.id, sessionId);
+      try {
+        if (sessionId != null &&
+            !(keyManager
+                    .getInboundGroupSession(event.room.id, sessionId)
+                    ?.isValid ??
+                false)) {
+          await keyManager.loadInboundGroupSession(event.room.id, sessionId);
+        }
+        event = decryptRoomEventSync(event);
+      } finally {
+        release?.call();
       }
-      event = decryptRoomEventSync(event);
       if (event.type == EventTypes.Encrypted &&
           event.content['can_request_session'] == true &&
           sessionId != null) {

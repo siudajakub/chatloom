@@ -262,3 +262,62 @@ messages"):
   cannot revive deleted votes, nor can disposing/re-mounting the poll widget.
   No persisted event type or encryption behavior changes. Covered by the same
   adapter suite and existing timeline redaction regression tests.
+
+### 2026-11-26 — bounded database quick-access cache
+
+- `Box._quickAccessCache` (`lib/src/database/sqflite_box.dart`) is an LRU
+  bounded by `Box.maxCachedValues` (2000 per box, evicted with 10 % slack).
+  Upstream kept every value ever read or written (events, timeline
+  fragments, receipts, presences, members, sessions) until logout, so a
+  desktop client left running for a day grew by hundreds of MB.
+- Eviction never runs while a transaction is open or its batch is not yet
+  committed (`BoxCollection._openTransactions`), so uncommitted writes and
+  delete tombstones stay visible to reads exactly as before. A read that
+  races a newer write keeps the newer cached value.
+- Regression: `test/box_cache_bound_test.dart`.
+
+### 2026-11-26 — bounded inbound group session cache
+
+- `KeyManager` keeps at most `KeyManager.maxCachedInboundGroupSessions`
+  (256, evicted with 10 % slack) inbound megolm sessions in memory, in
+  least-recently-used order (`lib/encryption/utils/inbound_group_session_cache.dart`).
+  Upstream kept every session it loaded or received until logout, each with
+  its vodozemac object, key content and the replay-index map, which grows by
+  one entry per decrypted message.
+- Eviction drops only the in-memory copy. The database row is unchanged and
+  `loadInboundGroupSession` reloads it on demand, the same state as after an
+  app restart. Vodozemac sessions are Rust opaque objects freed by their
+  finalizer; nothing is disposed explicitly, so a caller that still
+  references an evicted session keeps a valid object.
+- A session is never evicted while held: `Encryption.decryptRoomEvent` holds
+  it from loading until decrypting, `decryptRoomEventSync` until its
+  replay-index write has landed, and `clearOrUseOutboundGroupSession` holds
+  our copy of the outbound session while `allowed_at_index` may change, and
+  `setInboundGroupSession` until the new session is stored. An evicted
+  session therefore always equals its database copy. Held sessions may push
+  the cache briefly above the bound; the next store trims it.
+- Recently evicted ids are remembered (16 × the bound). For those,
+  `setInboundGroupSession` compares an incoming key with the stored copy and
+  `request` counts the session as held before, exactly as if it had stayed
+  in memory: a duplicate or worse key never replaces it, resets its indexes or
+  queues it for backup upload again. Older evictions behave like sessions not
+  loaded since the app started (upstream behavior).
+- `loadInboundGroupSession` no longer overwrites a session stored or loaded
+  while it was reading the database (upstream race: an older key or a second
+  copy of the replay indexes could replace the newer in-memory session).
+- What is stored, uploaded to key backup, forwarded or withheld is unchanged.
+  Outbound sessions are not touched. `getInboundGroupSession` stays
+  memory-only, so it now returns `null` for an evicted session (as upstream
+  does after a restart).
+- Regressions: `test/inbound_group_session_cache_test.dart` (pure Dart) and
+  `test/encryption/inbound_session_eviction_test.dart` (`olm`: decryption
+  after eviction, concurrent reloads, replay indexes kept, duplicate and
+  better/worse keys for evicted sessions, outbound session not rotated).
+
+### 2026-11-26 — key sets of large boxes are not cached
+
+- `Box.getAllKeys` caches the key set only when it has at most
+  `Box.maxCachedValues` keys, and `put` drops a cached set that outgrew it
+  (outside transactions). Upstream pinned every key of `events` and
+  `room_members` after the first `forgetRoom`/`getUsers` and grew it with
+  each write. Regression: `test/box_cache_bound_test.dart`.

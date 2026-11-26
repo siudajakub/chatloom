@@ -12,6 +12,7 @@ import '../matrix.dart';
 import '../src/utils/run_in_root.dart';
 import 'encryption.dart';
 import 'utils/base64_unpadded.dart';
+import 'utils/inbound_group_session_cache.dart';
 import 'utils/outbound_group_session.dart';
 import 'utils/pickle_key.dart';
 import 'utils/session_key.dart';
@@ -25,7 +26,15 @@ class KeyManager {
   Client get client => encryption.client;
   final outgoingShareRequests = <String, KeyManagerKeyShareRequest>{};
   final incomingShareRequests = <String, KeyManagerKeyShareRequest>{};
-  final _inboundGroupSessions = <String, Map<String, SessionKey>>{};
+
+  /// ChatLoom: most inbound group sessions kept in memory. Older ones are
+  /// reloaded from the database when needed (see [InboundGroupSessionCache]);
+  /// upstream kept every session it ever loaded until logout.
+  static int maxCachedInboundGroupSessions = 256;
+
+  final _inboundGroupSessions = InboundGroupSessionCache<SessionKey>(
+    maxSessions: () => maxCachedInboundGroupSessions,
+  );
   final _outboundGroupSessions = <String, OutboundGroupSession>{};
   final Set<String> _loadedOutboundGroupSessions = <String>{};
   final Map<String, Completer<void>> _requestedSessionIdCompleters =
@@ -73,6 +82,16 @@ class KeyManager {
     _inboundGroupSessions.clear();
   }
 
+  /// ChatLoom: keeps the inbound group session in memory until the returned
+  /// callback runs. The SDK holds a session between loading and using it and
+  /// while a write of what changed in it is pending, so an evicted session
+  /// always equals its database copy.
+  void Function() holdInboundGroupSession(String roomId, String sessionId) =>
+      _inboundGroupSessions.hold(roomId, sessionId);
+
+  /// Tests: inbound group sessions in memory.
+  int get debugCachedInboundGroupSessions => _inboundGroupSessions.length;
+
   Future<void> setInboundGroupSession(
     String roomId,
     String sessionId,
@@ -94,7 +113,14 @@ class KeyManager {
         senderClaimedKeys_['ed25519'] = device.ed25519Key!;
       }
     }
-    final oldSession = getInboundGroupSession(roomId, sessionId);
+    var oldSession = getInboundGroupSession(roomId, sessionId);
+    if (oldSession == null &&
+        _inboundGroupSessions.wasEvicted(roomId, sessionId)) {
+      // ChatLoom: dropped from memory earlier in this run. Compare with the
+      // stored copy exactly as if it had stayed in memory, so a duplicate or
+      // worse key never replaces it (nor resets its indexes or upload state).
+      oldSession = await loadInboundGroupSession(roomId, sessionId);
+    }
     if (content['algorithm'] != AlgorithmTypes.megolmV1AesSha2) {
       return;
     }
@@ -135,13 +161,14 @@ class KeyManager {
       return;
     }
 
-    final roomInboundGroupSessions = _inboundGroupSessions[roomId] ??=
-        <String, SessionKey>{};
-    roomInboundGroupSessions[sessionId] = newSession;
+    _inboundGroupSessions.put(roomId, sessionId, newSession);
     if (!client.isLogged() || client.encryption == null) {
       return;
     }
 
+    // ChatLoom: keep the new session in memory until it is stored, so a
+    // reload after eviction can never miss it or read the replaced row.
+    final release = holdInboundGroupSession(roomId, sessionId);
     final storeFuture = client.database
         .storeInboundGroupSession(
           roomId,
@@ -163,7 +190,8 @@ class KeyManager {
               sessionId,
             );
           }
-        });
+        })
+        .whenComplete(release);
     final room = client.getRoomById(roomId);
     if (room != null) {
       // attempt to decrypt the last event
@@ -208,7 +236,7 @@ class KeyManager {
   }
 
   SessionKey? getInboundGroupSession(String roomId, String sessionId) {
-    final sess = _inboundGroupSessions[roomId]?[sessionId];
+    final sess = _inboundGroupSessions.get(roomId, sessionId);
     if (sess != null) {
       if (sess.sessionId != sessionId && sess.sessionId.isNotEmpty) {
         return null;
@@ -265,7 +293,7 @@ class KeyManager {
     String roomId,
     String sessionId,
   ) async {
-    final sess = _inboundGroupSessions[roomId]?[sessionId];
+    final sess = _inboundGroupSessions.get(roomId, sessionId);
     if (sess != null) {
       if (sess.sessionId != sessionId && sess.sessionId.isNotEmpty) {
         return null; // session_id does not match....better not do anything
@@ -276,18 +304,27 @@ class KeyManager {
       roomId,
       sessionId,
     );
+    // ChatLoom: a session stored or loaded while the database was read is
+    // newer (or the same row); replacing it would put an older key or a
+    // second copy of the replay indexes in memory.
+    final current = _inboundGroupSessions.get(roomId, sessionId);
+    if (current != null) {
+      if (current.sessionId != sessionId && current.sessionId.isNotEmpty) {
+        return null;
+      }
+      return current;
+    }
     if (session == null) return null;
     final userID = client.userID;
     if (userID == null) return null;
     final dbSess = SessionKey.fromDb(session, userID);
-    final roomInboundGroupSessions = _inboundGroupSessions[roomId] ??=
-        <String, SessionKey>{};
     if (!dbSess.isValid ||
         dbSess.sessionId.isEmpty ||
         dbSess.sessionId != sessionId) {
       return null;
     }
-    return roomInboundGroupSessions[sessionId] = dbSess;
+    _inboundGroupSessions.put(roomId, sessionId, dbSess);
+    return dbSess;
   }
 
   Map<String, Map<String, bool>> _getDeviceKeyIdMap(
@@ -318,6 +355,31 @@ class KeyManager {
     String roomId, {
     bool wipe = false,
     bool use = true,
+  }) async {
+    // ChatLoom: hold our inbound copy of the outbound session while its
+    // `allowed_at_index` may change and be written.
+    final sessionId = getOutboundGroupSession(
+      roomId,
+    )?.outboundGroupSession?.sessionId;
+    if (sessionId == null) {
+      return _clearOrUseOutboundGroupSession(roomId, wipe: wipe, use: use);
+    }
+    final release = holdInboundGroupSession(roomId, sessionId);
+    try {
+      return await _clearOrUseOutboundGroupSession(
+        roomId,
+        wipe: wipe,
+        use: use,
+      );
+    } finally {
+      release();
+    }
+  }
+
+  Future<bool> _clearOrUseOutboundGroupSession(
+    String roomId, {
+    required bool wipe,
+    required bool use,
   }) async {
     final room = client.getRoomById(roomId);
     final sess = getOutboundGroupSession(roomId);
@@ -767,8 +829,11 @@ class KeyManager {
     );
     if (tryOnlineBackup && await isCached()) {
       // let's first check our online key backup store thingy...
+      // ChatLoom: a session evicted from memory in this run counts as held
+      // before, as upstream kept it in memory.
       final hadSessionBefore =
-          getInboundGroupSession(room.id, sessionId) != null;
+          getInboundGroupSession(room.id, sessionId) != null ||
+          _inboundGroupSessions.wasEvicted(room.id, sessionId);
       try {
         await loadSingleKey(room.id, sessionId);
       } catch (err, stacktrace) {
@@ -785,7 +850,11 @@ class KeyManager {
         }
       }
 
-      final storedSession = getInboundGroupSession(room.id, sessionId);
+      final storedSession =
+          getInboundGroupSession(room.id, sessionId) ??
+          (hadSessionBefore
+              ? await loadInboundGroupSession(room.id, sessionId)
+              : null);
       // We loaded *something* from backup we didn't have before — peers are
       // unlikely to do better, so don't spam to-device requests.
       final loadedFreshFromBackup = !hadSessionBefore && storedSession != null;
