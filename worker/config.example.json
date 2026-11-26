@@ -12,6 +12,5 @@
   "autoTranscriptionMatrix": true,
   "autoTranscriptionReels": false,
   "transcriptionProvider": "openrouter",
-  "transcriptionModel": "openai/gpt-transcribe",
-  "transcriptionTimingModel": "elevenlabs/scribe-v2"
+  "transcriptionModel": "microsoft/mai-transcribe-2"
 }

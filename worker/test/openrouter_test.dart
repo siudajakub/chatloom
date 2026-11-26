@@ -196,26 +196,22 @@ void main() {
       return WorkerConfig.read(file.path);
     }
 
-    test(
-      'defaults to GPT through OpenRouter without an implicit second call',
-      () {
-        expect(
-          read({}).transcriptionModel,
-          TranscriptionModel.openRouterGptTranscribe,
-        );
-        expect(read({}).transcriptionTimingModel, isNull);
-        expect(read({}).autoTranscriptionReels, isFalse);
-        expect(
-          read({'transcriptionProvider': 'openrouter'}).transcriptionModel,
-          TranscriptionModel.openRouterGptTranscribe,
-        );
-        expect(
-          TranscriptionModel.grokStt.pricePerMinute,
-          closeTo(0.10 / 60, 1e-12),
-        );
-        expect(TranscriptionModel.grokStt.timestamps, isTrue);
-      },
-    );
+    test('defaults to MAI-Transcribe-2 through OpenRouter without an implicit '
+        'second call', () {
+      expect(read({}).transcriptionModel, TranscriptionModel.maiTranscribe2);
+      expect(TranscriptionModel.maiTranscribe2.timestamps, isTrue);
+      expect(read({}).transcriptionTimingModel, isNull);
+      expect(read({}).autoTranscriptionReels, isFalse);
+      expect(
+        read({'transcriptionProvider': 'openrouter'}).transcriptionModel,
+        TranscriptionModel.maiTranscribe2,
+      );
+      expect(
+        TranscriptionModel.grokStt.pricePerMinute,
+        closeTo(0.10 / 60, 1e-12),
+      );
+      expect(TranscriptionModel.grokStt.timestamps, isTrue);
+    });
 
     test('rollback to OpenAI is a config change', () {
       expect(
@@ -266,18 +262,25 @@ void main() {
       }
     });
 
-    test(
-      'the deployment example selects GPT and Scribe through OpenRouter',
-      () {
-        final config = WorkerConfig.read('config.example.json');
-        expect(
-          config.transcriptionModel,
-          TranscriptionModel.openRouterGptTranscribe,
-        );
-        expect(config.transcriptionTimingModel, TranscriptionModel.scribeV2);
-        expect(config.autoTranscriptionReels, isFalse);
-      },
-    );
+    test('newer OpenRouter models are selectable by name', () {
+      expect(
+        read({
+          'transcriptionModel': 'microsoft/mai-transcribe-2',
+        }).transcriptionModel,
+        TranscriptionModel.maiTranscribe2,
+      );
+      expect(
+        read({'transcriptionModel': 'x-ai/grok-stt-2.0'}).transcriptionModel,
+        TranscriptionModel.grokStt2,
+      );
+    });
+
+    test('the deployment example selects MAI-Transcribe-2 alone', () {
+      final config = WorkerConfig.read('config.example.json');
+      expect(config.transcriptionModel, TranscriptionModel.maiTranscribe2);
+      expect(config.transcriptionTimingModel, isNull);
+      expect(config.autoTranscriptionReels, isFalse);
+    });
 
     test('timing model is explicit and refuses unsupported provider pairs', () {
       final config = read({
@@ -438,10 +441,11 @@ void main() {
     SpeechTranscriber service(
       List<http.Response> answers, {
       String key = 'sk-or-v1-synthetic',
+      TranscriptionModel model = TranscriptionModel.grokStt,
     }) => SpeechTranscriber(
       key,
       temporaryRoot: directory.path,
-      model: TranscriptionModel.grokStt,
+      model: model,
       sleep: (wait) async => sleeps.add(wait),
       clientFactory: () => MockClient((request) async {
         requests.add(request);
@@ -509,6 +513,24 @@ void main() {
       expect([for (final line in timing.lines) line.words.length], [6, 4, 2]);
       expect(await directory.list().toList(), isEmpty);
     });
+
+    test(
+      'MAI-Transcribe-2 asks for ZDR endpoints and keeps word times',
+      () async {
+        final result = await run(
+          service([ok()], model: TranscriptionModel.maiTranscribe2),
+        );
+        final body = jsonDecode(requests.single.body) as Map<String, Object?>;
+        expect(body['model'], 'microsoft/mai-transcribe-2');
+        expect(body['response_format'], 'verbose_json');
+        expect(body['provider'], {'data_collection': 'deny', 'zdr': true});
+        expect(result.estimatedCostUsd, closeTo(6 * 0.10 / 3600, 1e-9));
+        expect(
+          TranscriptTiming.tryParse(result.timing, result.text),
+          isNotNull,
+        );
+      },
+    );
 
     test('automatic language detection sends no language', () async {
       await run(service([ok()]), language: null);

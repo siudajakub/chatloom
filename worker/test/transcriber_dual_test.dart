@@ -45,7 +45,12 @@ void main() {
             final body = jsonDecode(request.body) as Map;
             models.add(body['model'] as String);
             expect(body['language'], 'en');
-            expect(body['provider'], {'data_collection': 'deny'});
+            expect(
+              body['provider'],
+              models.length == 1
+                  ? {'data_collection': 'deny'}
+                  : {'data_collection': 'deny', 'zdr': true},
+            );
             if (models.length == 1) {
               expect(body['response_format'], 'json');
               return http.Response('{"text":"Hello, WORLD!"}', 200);

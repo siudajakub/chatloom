@@ -165,7 +165,7 @@ void main() {
   });
 
   group('config', () {
-    test('defaults to GPT through OpenRouter and accepts the OpenAI '
+    test('defaults to MAI-Transcribe-2 and accepts the OpenAI '
         'models by name', () async {
       final directory = await Directory.systemTemp.createTemp('worker-config-');
       addTearDown(() => directory.delete(recursive: true));
@@ -179,7 +179,7 @@ void main() {
       file.writeAsStringSync(jsonEncode(config()));
       expect(
         WorkerConfig.read(file.path).transcriptionModel,
-        TranscriptionModel.openRouterGptTranscribe,
+        TranscriptionModel.maiTranscribe2,
       );
       file.writeAsStringSync(jsonEncode(config('gpt-transcribe')));
       expect(

@@ -636,7 +636,10 @@ class SpeechTranscriber
           'timestamp_granularities': ['segment', 'word'],
         } else
           'response_format': 'json',
-        'provider': {'data_collection': 'deny'},
+        'provider': {
+          'data_collection': 'deny',
+          if (selectedModel.zdr) 'zdr': true,
+        },
       }),
     );
     return request;

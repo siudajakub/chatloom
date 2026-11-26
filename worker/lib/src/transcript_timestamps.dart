@@ -40,12 +40,17 @@ class TranscriptionModel {
   final String name;
   final double pricePerMinute;
   final bool timestamps;
+
+  /// OpenRouter has zero-data-retention endpoints for this model; requests
+  /// then ask for them (`provider.zdr`), not only for no training.
+  final bool zdr;
   const TranscriptionModel._(
     this.provider,
     this.name,
     this.pricePerMinute,
-    this.timestamps,
-  );
+    this.timestamps, {
+    this.zdr = false,
+  });
 
   /// xAI's Grok speech-to-text through OpenRouter, retained for compatibility.
   static const grokStt = TranscriptionModel._(
@@ -77,22 +82,49 @@ class TranscriptionModel {
     'elevenlabs/scribe-v2',
     0.0000611111111111 * 60,
     true,
+    zdr: true,
+  );
+
+  /// Microsoft MAI-Transcribe-2 through OpenRouter (Azure, ZDR): text plus
+  /// segment and word times in one request. OpenRouter's catalogue price
+  /// field is wrong for it; the billed `usage.cost` was USD 0.10 per hour
+  /// (checked 2026-11-26).
+  static const maiTranscribe2 = TranscriptionModel._(
+    TranscriptionProvider.openrouter,
+    'microsoft/mai-transcribe-2',
+    0.10 / 60,
+    true,
+    zdr: true,
+  );
+
+  /// xAI Grok STT 2.0 through OpenRouter: word times, no ZDR endpoint.
+  static const grokStt2 = TranscriptionModel._(
+    TranscriptionProvider.openrouter,
+    'x-ai/grok-stt-2.0',
+    0.10 / 60,
+    true,
   );
   static const all = [
     grokStt,
+    grokStt2,
     gptTranscribe,
     whisper1,
     openRouterGptTranscribe,
     scribeV2,
+    maiTranscribe2,
   ];
 
   /// The model of a config that names neither a provider nor a model.
-  static const standard = openRouterGptTranscribe;
+  /// MAI-Transcribe-2 since 2026-11-26: on public Polish speech (FLEURS
+  /// pl, 537 words) 1.1 % WER against 2.6 % for GPT and 3.4–7.8 % for
+  /// Grok 2, Scribe, Voxtral and Nemotron; ZDR, word times in the same
+  /// request, about a third of GPT's price.
+  static const standard = maiTranscribe2;
 
   /// The model of a config that names only [provider].
   static TranscriptionModel defaultFor(TranscriptionProvider provider) =>
       switch (provider) {
-        TranscriptionProvider.openrouter => openRouterGptTranscribe,
+        TranscriptionProvider.openrouter => maiTranscribe2,
         TranscriptionProvider.openai => gptTranscribe,
       };
 

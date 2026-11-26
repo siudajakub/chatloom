@@ -85,7 +85,7 @@ Pipeline (2026-10-19): sources are the local index scan (every 3 s, local bridge
 
 Shared Instagram and Facebook video attachments are transcribed only when a user holds the message and selects Transcribe. The worker advertises this capability with `transcriptionMedia: 4`. Local bridge rooms also require a matching local source adapter. Both transports check the manual origin before downloading a reel. Automatic discovery continues to skip shared reels, including for older policies with the reel switch enabled. Text links alone contain no attached audio. View-once, protected, disappearing and silent media remain excluded.
 
-Reply-quote gists (2026-11-13, J): when someone replies to a voice note, the app's reply quote shows "Voice message" with a cue of which note it was. After every finished transcript (manual or automatic) the worker stores `gist` on the transcript job: a transcript of at most 14 words / 100 characters is its own gist (verbatim, free); otherwise one request to OpenRouter `google/gemini-3.1-flash-lite` (ZDR, no data collection, max 160 output tokens, never retried) writes one sentence (≤ 60 words of transcript) or at most two, in the speaker's language, packed with names, places, numbers and keywords. The paid transcript is saved as the pending result before that request, so a crash still publishes it; a failed or refused gist leaves the transcript as it is and apps quote its text instead. The gist cost (or its ceiling when the outcome is unknown) is added to the job's `estimatedCostUsd`, so automatic jobs count it in the daily budget, and a gist that would pass the budget is skipped. Identical media reuses the earlier gist; a redacted source or a new transcript drops it. Operator switch `transcriptGists` (default true; needs the OpenRouter key). Older apps ignore the field.
+Reply-quote gists (2026-11-13, J): when someone replies to a voice note, the app's reply quote shows "Voice message" with a cue of which note it was. After every finished transcript (manual or automatic) the worker stores `gist` on the transcript job: a transcript of at most 14 words / 100 characters is its own gist (verbatim, free); otherwise one request to OpenRouter `openai/gpt-6-luna` (the summary model since 2026-11-26; ZDR, no data collection, max 160 output tokens, never retried) writes one sentence of at most 18 words (≤ 60 words of transcript) or at most two (28 words), in the speaker's language, packed with names, places, numbers and keywords. The paid transcript is saved as the pending result before that request, so a crash still publishes it; a failed or refused gist leaves the transcript as it is and apps quote its text instead. The gist cost (or its ceiling when the outcome is unknown) is added to the job's `estimatedCostUsd`, so automatic jobs count it in the daily budget, and a gist that would pass the budget is skipped. Identical media reuses the earlier gist; a redacted source or a new transcript drops it. Operator switch `transcriptGists` (default true; needs the OpenRouter key). Older apps ignore the field.
 
 J asked for automatic transcription of incoming voice and round messages on 2026-10-17. Shared reels are never transcribed (see above). It needs **both** the synced user policy and the private operator switch `"autoTranscription": true` in the worker config (default false); the worker's own scan additionally needs `localSourceSocket`. The synced policy is the private journal metadata entity `transcription-policy` (`version`, `auto`, `enabledAt`, `defaultLanguage`, `networks`, `chatOverrides`, `maxSeconds` default 300, `dailyBudgetUsd` default 1.0). An absent policy means automatic on for incoming voice/round messages in every network (J's request); an unreadable or newer-version policy means off. A policy that was never switched on explicitly has no `enabledAt`: the worker scan then starts at the end of the index, and each app starts its own window when it first sees that policy together with a `scan` heartbeat (stored only in the device's encrypted local store, never journaled), so an upgrade never sweeps up the last 24 hours.
 
@@ -98,6 +98,29 @@ J asked for automatic transcription of incoming voice and round messages on 2026
 * The heartbeat reports `autoTranscription: scan` when the operator switch is on and a source (local adapter or the Matrix sync feed) is active, otherwise `off`.
 
 OpenAI model and price were verified against [official model documentation](https://developers.openai.com/api/docs/models/gpt-transcribe), and format/size/language fields against [file transcription documentation](https://developers.openai.com/api/docs/guides/speech-to-text), on 2026-10-04. Pricing is an estimate, not invoiced usage.
+
+### Provider and model (2026-11-26)
+
+The default model is now `microsoft/mai-transcribe-2` through OpenRouter: text
+plus segment and word times in one request, ZDR endpoints only
+(`provider.zdr: true` besides `data_collection: deny`), USD 0.10 per hour
+billed (OpenRouter's catalogue price field for it is wrong; checked with
+`usage.cost`). On public Polish speech (FLEURS pl, 15 sentences joined into
+five ~1-minute files, 537 words, human references) it had 1.1 % WER with or
+without `language`, against 2.6 % for `openai/gpt-transcribe`, 3.4 % for
+`x-ai/grok-stt-2.0` (which also detected English on one Polish file), 5.4 %
+for Scribe v2, 5.6 % for Voxtral Small (dropped a sentence) and 7.8 % for
+Nemotron Transcribe. Its word times anchor fully; it returns about one segment
+per minute, so lines take their times from words. No timing model is needed.
+`x-ai/grok-stt-2.0` is selectable by name. The earlier five "Polish" samples
+of 2026-10-31 turned out to be English speech, so that comparison said nothing
+about Polish. A `prompt`/`keyterms` hint with participant names was accepted
+but gave no measurable gain, and LLM post-correction once inserted a hinted
+name nobody said; neither is used. Evidence:
+`artifacts/stt-results/20261126T161305Z/` (outside the repository).
+A config naming `openai/gpt-transcribe` (with Scribe timing) keeps working;
+switch by setting `"transcriptionModel": "microsoft/mai-transcribe-2"` and
+dropping `transcriptionTimingModel`.
 
 ### Provider and model (2026-11-05)
 
@@ -124,7 +147,7 @@ reused by the GPT pipeline.
 The previous default `x-ai/grok-stt-1.0` remains supported when explicitly named.
 It was selected on October 31 using five Polish notes, not an English evaluation.
 
-* **Config.** `transcriptionProvider` (`openrouter` or `openai`) and `transcriptionModel` are optional. Neither, or `openrouter` alone, selects `openai/gpt-transcribe`. `openai` alone selects direct `gpt-transcribe`. A model alone selects its provider; existing explicitly configured Grok/OpenAI models are retained. `transcriptionTimingModel` is optional and accepts only `elevenlabs/scribe-v2` paired with OpenRouter GPT; absent means no second request. Unknown names and incompatible pairs refuse startup. `autoTranscriptionReels` is ignored: shared reels are never transcribed.
+* **Config.** `transcriptionProvider` (`openrouter` or `openai`) and `transcriptionModel` are optional. Neither, or `openrouter` alone, selects `microsoft/mai-transcribe-2` (since 2026-11-26). `openai` alone selects direct `gpt-transcribe`. A model alone selects its provider; existing explicitly configured Grok/OpenAI models are retained. `transcriptionTimingModel` is optional and accepts only `elevenlabs/scribe-v2` paired with OpenRouter GPT; absent means no second request. Unknown names and incompatible pairs refuse startup. `autoTranscriptionReels` is ignored: shared reels are never transcribed.
 * **OpenRouter request.** `POST https://openrouter.ai/api/v1/audio/transcriptions` with `Authorization: Bearer <key>` and a JSON body: `model`, `input_audio` `{data: <base64 of the MP3 chunk>, format: "mp3"}` (about 4.8 MB for a 15-minute chunk), `language` only when the job names one (`pl`, `en`, `hy`; otherwise the model detects it), `response_format: "verbose_json"`, `timestamp_granularities: ["segment", "word"]` and `provider: {"data_collection": "deny"}`, so OpenRouter routes only to endpoints that do not keep or train on the audio. Only the JSON form carries that preference, so the worker never uses OpenRouter's multipart form. The answer has `text`, `segments`, `words`, `duration` and `usage` (billed seconds and cost); the worker keeps its own pre-upload estimate as the cost, as before. Chunking (900 s), retries, paid uncertainty, the automatic duration cap and the daily budget (at the selected model's price), source deletion checks and the clean media environment are the same for both providers.
 * **Key.** OpenRouter: the systemd credential `openrouter_api_key` (see "systemd credentials preparation"), or `openrouterApiKey` in the credentials JSON outside systemd. OpenAI: `openaiApiKey`. A missing key fails jobs with `openai_key_missing` before any upload. At start the worker logs one line, `Worker started: transcription <provider> <model>, key present|missing, automatic on|off`; `worker check` prints the same as `Worker check: …`. Neither ever prints the key.
 
@@ -175,14 +198,14 @@ making a provider request. Source input is capped at 400,000 UTF-8 bytes and
 when the app reports that the selection is too large. The worker runs at most
 one summary at a time beside its existing transcription/sync work.
 
-The default model is `nvidia/nemotron-3.5-lightning` at provider caps of
-$0.07 input and $0.20 output per million tokens. Detailed summaries and inputs
-over 240,000 UTF-8 bytes use `google/gemini-3.1-flash-lite` at $0.25 input
-and $1.50 output per million tokens. Requests require
-`data_collection: deny`, `zdr: true`, and `require_parameters: true`, with
-throughput sorting and per-model price caps. Reasoning is disabled, temperature
-is 0.2, and output is capped at 1,200/2,500/5,000 tokens for summaries and 1,000
-tokens for answers. A conservative input-byte estimate plus the
+The model is `openai/gpt-6-luna` (since 2026-11-26) at provider caps of
+$0.10 input and $0.50 output per million tokens, for every summary length,
+questions and gists; its 1M-token context covers the whole source limit.
+Requests require `data_collection: deny`, `zdr: true`, and
+`require_parameters: true`, with per-model price caps. Reasoning is off
+(`effort: none`) and no temperature is sent (the ZDR endpoint refuses it with
+`require_parameters`). Output is capped at 1,200/2,500/5,000 tokens for
+summaries and 1,000 tokens for answers. A conservative input-byte estimate plus the
 full output allowance must stay below USD 0.12 per request. Reported provider
 cost is used when it is valid and within that estimate; otherwise the result
 keeps the estimate. See the [public model catalogue](https://openrouter.ai/api/v1/models)
