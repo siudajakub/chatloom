@@ -496,7 +496,8 @@ void main() {
       expect(tester.hasRunningAnimations, isFalse);
     });
 
-    testWidgets('with a screen reader the swipe is off and the actions are '
+    testWidgets('accessible navigation keeps the swipe (Android sets it for '
+        'any accessibility service until restart); the actions are also '
         'custom semantics actions', (tester) async {
       final handle = tester.ensureSemantics();
       narrow(tester);
@@ -504,7 +505,7 @@ void main() {
       final row = find.byKey(const ValueKey('swipe'));
       await tester.drag(row, const Offset(-200, 0));
       await tester.pumpAndSettle();
-      expect(committed, isEmpty);
+      expect(committed, ['archive']);
       final data = tester.getSemantics(row).getSemanticsData();
       expect(data.customSemanticsActionIds, hasLength(2));
       handle.dispose();

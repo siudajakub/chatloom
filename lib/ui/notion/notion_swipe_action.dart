@@ -47,8 +47,10 @@ class NotionSwipeActionSide {
 ///   `NotionMotion.snappy` (instantly under reduced motion).
 /// * Touch only, never from the system back-gesture edges (Android
 ///   predictive back stays the system's), and a mostly vertical drag is left
-///   to the list. Off while a screen reader runs: the actions are then
-///   custom semantics actions (and the row's long-press menu).
+///   to the list. The actions are also custom semantics actions (and the
+///   row's long-press menu) for screen readers. Never switched off by
+///   `MediaQuery.accessibleNavigation`: Android sets it once any
+///   accessibility service reads the screen and keeps it until restart.
 /// * A side that [NotionSwipeActionSide.dismisses] flies off and collapses
 ///   its slot before it commits (instantly under reduced motion).
 /// * No controller until the first swipe; the row is translated, never
@@ -133,7 +135,12 @@ class _NotionSwipeActionState extends State<NotionSwipeAction>
     if (widget.startToEnd == null && widget.endToStart == null) return false;
     final media = context.getInheritedWidgetOfExactType<MediaQuery>()?.data;
     if (media == null) return true;
-    if (media.accessibleNavigation) return false;
+    // Never off for `accessibleNavigation`: the Android engine sets it the
+    // first time any accessibility service (autofill, a dictation or
+    // automation app) reads the screen and clears it only when accessibility
+    // goes off, so swipes stopped until the app restarted. A screen reader
+    // with touch exploration keeps single-finger drags to itself anyway; it
+    // uses the custom semantics actions.
     // Leave both platform back edges to the system.
     final left = math.max(16.0, media.systemGestureInsets.left);
     final right = math.max(16.0, media.systemGestureInsets.right);
