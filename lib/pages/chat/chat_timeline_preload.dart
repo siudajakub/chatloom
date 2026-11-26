@@ -72,6 +72,21 @@ class ChatTimelinePreload {
     return preload;
   }
 
+  /// Drops a pending preload of [room] that no page will adopt: the chat
+  /// already showing [room] was navigated to again (a second tap on its
+  /// inbox row keeps the page), so the preloaded timeline would otherwise
+  /// stay subscribed, collecting that room's events, until the next tap.
+  static void discardFor(Room room) {
+    final preload = _pending;
+    if (preload == null ||
+        preload.room.id != room.id ||
+        !identical(preload.room.client, room.client)) {
+      return;
+    }
+    _pending = null;
+    preload.discard();
+  }
+
   /// Routes the timeline's SDK callbacks to the adopting chat.
   void adopt({
     required void Function() onUpdate,

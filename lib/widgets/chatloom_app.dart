@@ -114,6 +114,9 @@ class ChatLoomApp extends StatelessWidget {
             windowVisible: PlatformInfos.isMacOS
                 ? MacDesktopWindow.visible
                 : null,
+            windowActive: PlatformInfos.isMacOS
+                ? MacDesktopWindow.active
+                : null,
             // Battery Saver / Low Power Mode: lite mode (BP-08).
             powerSaving: PowerSaving.watch(),
             child: AppLockWidget(

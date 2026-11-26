@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:collection/collection.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:matrix/matrix.dart';
@@ -75,5 +77,62 @@ class SyncNetworkRecovery {
     }
     if (!foreground()) return;
     await wakeSyncOnNetworkRecovery(clients, networks);
+  }
+
+  /// Forgets the last reported networks: the next report is a new baseline,
+  /// not a transition (the watcher starts again after the app came back,
+  /// whose own catch-up already syncs).
+  void reset() => _last = null;
+}
+
+/// The platform's network watcher, subscribed only while [active] (2026-11-26).
+///
+/// A phone's sync loop is off in the background and [SyncNetworkRecovery]
+/// ignores every report there, yet the subscription kept Android's default
+/// network callback registered: each capability change of the current
+/// network (signal, bandwidth estimate, validation) still reached the app
+/// while it was away, through the platform channel into Dart, for nothing.
+/// Cancelling the last listener unregisters that callback; starting again
+/// calls [onStart] first, and the platform then reports the current networks
+/// at once.
+class NetworkWatch {
+  NetworkWatch({
+    required Stream<List<ConnectivityResult>> Function() changes,
+    required this.onNetworks,
+    this.onStart,
+    this.onError,
+  }) : _changes = changes;
+
+  final Stream<List<ConnectivityResult>> Function() _changes;
+  final void Function(List<ConnectivityResult> networks) onNetworks;
+  final void Function()? onStart;
+  final void Function()? onError;
+  StreamSubscription<List<ConnectivityResult>>? _subscription;
+  bool _disposed = false;
+
+  /// Whether the watcher is subscribed.
+  bool get active => _subscription != null;
+
+  set active(bool active) {
+    if (_disposed || active == this.active) return;
+    if (!active) {
+      unawaited(_subscription?.cancel());
+      _subscription = null;
+      return;
+    }
+    onStart?.call();
+    try {
+      _subscription = _changes().listen(
+        onNetworks,
+        onError: (Object _, StackTrace _) => onError?.call(),
+      );
+    } catch (_) {
+      onError?.call();
+    }
+  }
+
+  void dispose() {
+    active = false;
+    _disposed = true;
   }
 }

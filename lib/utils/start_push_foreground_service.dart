@@ -185,6 +185,9 @@ abstract class ForegroundServices {
         foregroundTaskOptions: ForegroundTaskOptions(
           eventAction: ForegroundTaskEventAction.nothing(),
           allowWakeLock: true,
+          // No wake-up alarm to restart a service that timed out or was
+          // killed: nothing would be left for it to do (battery).
+          allowAutoRestart: false,
         ),
       );
       if (await FlutterForegroundTask.isRunningService) {

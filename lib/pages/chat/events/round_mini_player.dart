@@ -67,8 +67,18 @@ class RoundDetachedPlayback {
     this.enlarge = false,
     this.loader,
   });
+
+  /// Where a paused video that nothing draws was asked to seek to. Applied
+  /// natively on play or when a row takes the controller back; until then
+  /// the bar shows it as the position.
+  ///
+  /// A native seek asks the platform for a new frame, and on macOS
+  /// (`video_player_avfoundation`) keeps a display link firing every vsync
+  /// until a texture is composited, which never happens for the mini bar.
+  Duration? pendingSeek;
+
   Duration get position =>
-      video?.value.position ?? audio?.position ?? Duration.zero;
+      pendingSeek ?? video?.value.position ?? audio?.position ?? Duration.zero;
   Duration get duration =>
       video?.value.duration ?? audio?.duration ?? Duration.zero;
   bool get playing => video?.value.isPlaying ?? audio?.playing ?? false;
@@ -180,6 +190,12 @@ class RoundMiniPlayerController extends ChangeNotifier
     }
     _unbind(session);
     _current = null;
+    // The row draws the controller from now on: the seek can land.
+    final seek = session.pendingSeek;
+    session.pendingSeek = null;
+    if (seek != null) {
+      unawaited(session.video!.seekTo(seek).catchError((Object _) {}));
+    }
     _notify();
     return session;
   }
@@ -308,6 +324,7 @@ class RoundMiniPlayerController extends ChangeNotifier
           return;
         }
         if (session.position >= session.duration) await seek(Duration.zero);
+        await _applyPendingSeek(session);
         session.finished = false;
         session.userInitiated = true;
         session.intent.begin(position: session.position, userInitiated: true);
@@ -343,6 +360,22 @@ class RoundMiniPlayerController extends ChangeNotifier
       position: position,
       userInitiated: session.userInitiated,
     );
+    final video = session.video;
+    if (video != null &&
+        !session.playing &&
+        !RoundStageController.shared.isStaged(video)) {
+      // Paused and drawn nowhere: remember the target (the bar shows it at
+      // once) instead of asking the platform for a frame nobody composites.
+      final duration = video.value.duration;
+      session.pendingSeek = position < Duration.zero
+          ? Duration.zero
+          : duration > Duration.zero && position > duration
+          ? duration
+          : position;
+      _notify();
+      return;
+    }
+    session.pendingSeek = null;
     try {
       await session.video?.seekTo(position);
       await session.audio?.seek(position);
@@ -350,6 +383,19 @@ class RoundMiniPlayerController extends ChangeNotifier
       /* The position stays where the player is. */
     }
     _notify();
+  }
+
+  /// Lands a remembered seek natively, just before the video plays.
+  Future<void> _applyPendingSeek(RoundDetachedPlayback session) async {
+    final position = session.pendingSeek;
+    final video = session.video;
+    if (position == null || video == null) return;
+    try {
+      await video.seekTo(position);
+    } finally {
+      // Cleared after the native seek, so the bar never jumps back.
+      if (session.pendingSeek == position) session.pendingSeek = null;
+    }
   }
 
   Future<void> setSpeed(double value) async {

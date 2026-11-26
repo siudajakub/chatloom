@@ -502,6 +502,10 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   Object? _selectionKey;
   List<Room> _selection = const [];
 
+  /// View selections computed (row list and chip counts); performance tests.
+  @visibleForTesting
+  int debugSelections = 0;
+
   /// Visible rooms for the current view, search, network settings.
   /// Selection runs over cached records and is memoised until the inbox or
   /// one of the inputs changes.
@@ -510,13 +514,18 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
     final network = selectedNetwork;
     final key = (
       inbox,
-      inbox.generation,
+      // The legacy room filters read live room state; the private views
+      // only read inbox records (see [InboxController.selectionGeneration]).
+      activeFilter == ActiveFilter.allChats
+          ? inbox.selectionGeneration
+          : inbox.generation,
       personalFilter,
       personalLabel,
       activeFilter,
       network,
     );
     if (key == _selectionKey) return _selection;
+    debugSelections++;
     final index = inbox.index;
     final roomFilter = getRoomFilterByActiveFilter(activeFilter);
     _selection = inbox.projection
@@ -1239,8 +1248,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   /// appears only while there are some. Memoised like [unreadViewCount].
   int requestViewCount() {
     final inbox = this.inbox;
-    final key = (inbox, inbox.generation);
+    final key = (inbox, inbox.selectionGeneration);
     if (key == _requestKey) return _requestChats;
+    debugSelections++;
     _requestChats = inbox.projection
         .select(inbox.index, filter: InboxFilter.requests)
         .length;
@@ -1253,8 +1263,9 @@ class ChatListController extends State<ChatList> with TickerProviderStateMixin {
   int unreadViewCount() {
     final inbox = this.inbox;
     final network = selectedNetwork;
-    final key = (inbox, inbox.generation, network);
+    final key = (inbox, inbox.selectionGeneration, network);
     if (key == _unreadKey) return _unreadChats;
+    debugSelections++;
     final index = inbox.index;
     _unreadChats = inbox.projection
         .select(index, filter: InboxFilter.unread)

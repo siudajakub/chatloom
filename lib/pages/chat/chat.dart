@@ -792,6 +792,13 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   @override
+  void didUpdateWidget(ChatPageWithRoom oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Navigated to again while showing this room: nothing adopts a preload.
+    ChatTimelinePreload.discardFor(widget.room);
+  }
+
+  @override
   void initState() {
     inputFocus = FocusNode(onKeyEvent: _customEnterKeyHandling);
 
@@ -1427,7 +1434,11 @@ class ChatController extends State<ChatPageWithRoom>
   /// pages, decryption). Coalesce into one read-marker pass and one rebuild
   /// per frame.
   void updateView() {
-    if (!mounted || _viewUpdateScheduled) return;
+    if (!mounted) return;
+    // Before the coalescing: while paused no frame runs, so a scheduled
+    // update would swallow every later arrival.
+    if (_awaySince != null) _maybeBoundTimeline();
+    if (_viewUpdateScheduled) return;
     _viewUpdateScheduled = true;
     SchedulerBinding.instance.scheduleFrameCallback((_) {
       _viewUpdateScheduled = false;
@@ -1536,15 +1547,227 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _awaySince = null;
+      _boundAborted = null;
+    } else {
+      _awaySince ??= ChatController.debugNow();
+    }
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused) {
       if (mounted) _flushDraft();
       SeenPositions.instance.flush(widget.room.client);
+      if (mounted) _maybeBoundTimeline();
       return;
     }
     if (state != AppLifecycleState.resumed) return;
     if (!mounted) return;
     setReadMarker();
+  }
+
+  // -------------------------------------------------------------------------
+  // Bounded live timeline (long-running sessions).
+  //
+  // The SDK timeline of an open chat keeps every event that arrives and every
+  // page the user scrolled through for as long as the page lives: on a desktop
+  // or a long-lived Android process that is days of a busy chat. While the
+  // app is away, the live timeline is replaced by a fresh one holding the
+  // newest events (the SDK's own load, so its paging continues seamlessly
+  // when the user scrolls up later). In place trimming is not used: the SDK
+  // continues history paging after the oldest event it loaded, so trimmed
+  // events would be skipped. The rows on and around the screen are the same
+  // events with the same keys, so the position, the unread divider, the seen
+  // and read markers stay; it is skipped in a thread, a search, a jump
+  // (context timeline), while loading, sending, or anything else is pending.
+
+  /// Events a bounded reload keeps at least.
+  static const boundedTimelineEvents = 200;
+
+  /// A chat only reloads once the window would at least halve.
+  static const _boundFactor = 2;
+
+  /// Rows the reload keeps above the oldest row built (on screen or in the
+  /// list's cache extent).
+  static const _boundHeadroom = 100;
+
+  /// Rows the reload keeps below the read marker's own event, so the unread
+  /// divider still finds its row when the marker event is hidden.
+  static const _boundMarkerContext = 50;
+
+  /// How long a visible but unfocused window (macOS `inactive`) waits before
+  /// an arrival reloads; hidden or paused reloads at once.
+  static const boundTimelineAfter = Duration(minutes: 5);
+
+  /// Clock of [boundTimelineAfter] (also for the merged chat); tests
+  /// replace it.
+  static DateTime Function() debugNow = DateTime.now;
+
+  /// Since when the app has not been in front; null while resumed.
+  DateTime? _awaySince;
+  bool _bounding = false;
+
+  /// A reload that was read but not adopted: the timeline and its length
+  /// then. Retried only after this many more events, so arrivals never
+  /// repeat a futile store read.
+  (Timeline, int)? _boundAborted;
+  static const _boundRetryAfter = 50;
+
+  /// How many of the newest [events] a long-open chat reloads to, or null to
+  /// keep them: at least [boundedTimelineEvents], [_boundHeadroom] events
+  /// above the oldest built row at [oldestBuilt] (an index into [events]),
+  /// and the read marker with [_boundMarkerContext] events below it unless
+  /// that is far above; only when that at least halves what is loaded.
+  static int? boundedTimelineLimit(
+    List<Event> events, {
+    required int oldestBuilt,
+    String? readMarkerEventId,
+  }) {
+    if (oldestBuilt < 0) return null;
+    var limit = math.max(boundedTimelineEvents, oldestBuilt + _boundHeadroom);
+    if (readMarkerEventId != null && readMarkerEventId.isNotEmpty) {
+      final marker = events.indexWhere((e) => e.eventId == readMarkerEventId);
+      if (marker >= 0 && marker < _boundFactor * boundedTimelineEvents) {
+        limit = math.max(limit, marker + _boundMarkerContext);
+      }
+    }
+    return events.length > _boundFactor * limit ? limit : null;
+  }
+
+  /// Index in [current]'s events of the oldest row built, or -1. Read from
+  /// the built tags' row keys, not their indexes: while paused no frame runs,
+  /// so arrivals shift the indexes of rows built before.
+  int _oldestBuiltIndex(Timeline current) {
+    if (!scrollController.hasClients) return -1;
+    final built = builtRowKeys(scrollController);
+    if (built.isEmpty) return -1;
+    var oldest = -1;
+    final events = current.events;
+    for (var i = 0; i < events.length; i++) {
+      final event = events[i];
+      if (built.contains(event.transactionId ?? event.eventId)) oldest = i;
+    }
+    return oldest;
+  }
+
+  /// Row keys (`transactionId ?? eventId`) of the rows the list has built.
+  static Set<String> builtRowKeys(AutoScrollController controller) => {
+    for (final tag in controller.tagMap.values)
+      if (tag.widget.key case final ValueKey<String> key when tag.mounted)
+        key.value,
+  };
+
+  /// The bounded size for [current] and the index of its oldest built row,
+  /// or null when it must stay as it is.
+  ({int limit, int built})? _boundLimit(Timeline current) {
+    if (!mounted ||
+        _awaySince == null ||
+        !identical(timeline, current) ||
+        widget.timeline != null ||
+        !current.allowNewEvent ||
+        current.isRequestingHistory ||
+        current.isRequestingFuture ||
+        historyLoading ||
+        timelineLoadFailed ||
+        timelineHold.value ||
+        activeThreadId != null ||
+        searchActive ||
+        scrollToEventIdMarker != null ||
+        _returnStack.isNotEmpty ||
+        _unreadJumpEventId != null ||
+        current.events.length <= _boundFactor * boundedTimelineEvents) {
+      return null;
+    }
+    final oldestBuilt = _oldestBuiltIndex(current);
+    final limit = boundedTimelineLimit(
+      current.events,
+      oldestBuilt: oldestBuilt,
+      readMarkerEventId: readMarkerEventId,
+    );
+    if (limit == null) return null;
+    // A send in flight keeps its event object (upload progress, echo).
+    if (current.events
+        .take(limit)
+        .any((event) => !event.status.isSynced && !event.status.isError)) {
+      return null;
+    }
+    return (limit: limit, built: oldestBuilt);
+  }
+
+  void _maybeBoundTimeline() {
+    final current = timeline;
+    final away = _awaySince;
+    if (_bounding || current == null || away == null) return;
+    final state = WidgetsBinding.instance.lifecycleState;
+    final hidden =
+        state == AppLifecycleState.hidden || state == AppLifecycleState.paused;
+    if (!hidden && debugNow().difference(away) < boundTimelineAfter) return;
+    final aborted = _boundAborted;
+    if (aborted != null &&
+        identical(aborted.$1, current) &&
+        current.events.length < aborted.$2 + _boundRetryAfter) {
+      return;
+    }
+    final bound = _boundLimit(current);
+    if (bound == null) return;
+    unawaited(_boundTimeline(current, bound.limit));
+  }
+
+  Future<void> _boundTimeline(Timeline current, int limit) async {
+    _bounding = true;
+    final generation = _timelineLoadGeneration;
+    final requestedRoom = current.room;
+    final Timeline fresh;
+    try {
+      fresh = await requestedRoom.getTimeline(
+        onUpdate: updateView,
+        onInsert: _insert,
+        limit: limit,
+      );
+    } catch (e, s) {
+      // An optimization only: the chat keeps its timeline.
+      logBackgroundError('timeline_bound', e, s);
+      return;
+    } finally {
+      _bounding = false;
+    }
+    // Everything may have changed while the store was read.
+    final kept = generation == _timelineLoadGeneration
+        ? _boundLimit(current)
+        : null;
+    if (kept == null ||
+        kept.limit > limit ||
+        !sameNewestEvents(current, fresh, kept.built + 1 + boundCompared)) {
+      fresh.cancelSubscriptions();
+      _boundAborted = (current, current.events.length);
+      return;
+    }
+    _boundAborted = null;
+    setTimelineState(() {
+      timeline = fresh;
+      _conversationEvents = null;
+      _conversationEventsKey = null;
+      _historyPositions.clear();
+      historyError = null;
+    });
+    current.cancelSubscriptions();
+  }
+
+  /// Events past the oldest built row that must match as well.
+  static const boundCompared = 20;
+
+  /// Whether [fresh] starts with the first [count] events of [current], by
+  /// row key and in the same order: the rows on and around the screen.
+  static bool sameNewestEvents(Timeline current, Timeline fresh, int count) {
+    final expected = current.events.take(count).toList();
+    if (fresh.events.length < expected.length) return false;
+    for (var i = 0; i < expected.length; i++) {
+      final a = expected[i], b = fresh.events[i];
+      if ((a.transactionId ?? a.eventId) != (b.transactionId ?? b.eventId) ||
+          a.status.isError != b.status.isError) {
+        return false;
+      }
+    }
+    return true;
   }
 
   String? _setReadMarkerEventId;

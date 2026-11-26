@@ -24,6 +24,10 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
+    <!-- Only flutter_foreground_task's boot receiver (removed below) asks
+         for this; nothing in ChatLoom starts at boot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
 
     <!-- To make app compatible with tablets -->
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
@@ -148,6 +152,23 @@
              android:foregroundServiceType="shortService"
              android:exported="false">
         </service>
+
+        <!-- The short service only ever covers bounded Dart work (a push, an
+             upload, a notification action) that holds a lease on it. The
+             plugin's receivers restart it without that work: at boot and
+             after an app update (RebootReceiver; every boot started the app
+             process only for it to return), and from the wake-up alarm the
+             plugin sets when the service ends without a stop from Dart, such
+             as the system's 3-minute short-service timeout (RestartReceiver).
+             With battery optimisation off, a restarted service holds its
+             wake lock until the next timeout, which re-arms the alarm. Kept
+             out of the merged manifest (battery wave, 2026-11-26). -->
+        <receiver
+            android:name="com.pravera.flutter_foreground_task.service.RebootReceiver"
+            tools:node="remove" />
+        <receiver
+            android:name="com.pravera.flutter_foreground_task.service.RestartReceiver"
+            tools:node="remove" />
 
         <!-- From flutter_local_notifications package for notification actions -->
         <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" />

@@ -95,7 +95,15 @@ final class UndecryptableMessages extends ChangeNotifier {
   /// "Try again". A device that answers later still unlocks the message.
   final Duration deviceAnswerTimeout;
 
-  final _stages = <String, ValueNotifier<KeyRecoveryStage?>>{};
+  /// Sessions kept beyond which the oldest idle ones are forgotten: not
+  /// running, not waiting for a device, and with no bubble watching. A
+  /// forgotten session is asked again if its bubble returns, as after a
+  /// restart; [retry] and live bubbles are unaffected.
+  static const sessionLimit = 512;
+
+  final _stages = <String, _StageNotifier>{};
+
+  /// Run number per session, least recently started first.
   final _runs = <String, int>{};
   final _timers = <String, Timer>{};
   final _rooms = <String, StreamSubscription<String>>{};
@@ -121,8 +129,36 @@ final class UndecryptableMessages extends ChangeNotifier {
       (event.messageType != MessageTypes.BadEncrypted ||
           event.content['can_request_session'] == true);
 
-  ValueNotifier<KeyRecoveryStage?> _notifier(String key) =>
-      _stages[key] ??= ValueNotifier<KeyRecoveryStage?>(null);
+  _StageNotifier _notifier(String key) {
+    final existing = _stages[key];
+    if (existing != null) return existing;
+    final created = _stages[key] = _StageNotifier();
+    _forgetIdleSessions(except: key);
+    return created;
+  }
+
+  /// Sessions tracked now (runs and stages); tests only.
+  @visibleForTesting
+  int get debugTrackedSessions => {..._runs.keys, ..._stages.keys}.length;
+
+  /// Sessions whose request flow is running right now.
+  final _running = <String>{};
+
+  bool _busy(String key) =>
+      _running.contains(key) ||
+      _timers.containsKey(key) ||
+      (_stages[key]?.watched ?? false);
+
+  void _forgetIdleSessions({required String except}) {
+    bool over() => _runs.length > sessionLimit || _stages.length > sessionLimit;
+    if (_disposed || !over()) return;
+    for (final key in [..._runs.keys, ..._stages.keys]) {
+      if (!over()) return;
+      if (key == except || _busy(key)) continue;
+      _runs.remove(key);
+      _stages.remove(key)?.dispose();
+    }
+  }
 
   /// Live stage of [event]'s key; `null` until the first request starts.
   ValueListenable<KeyRecoveryStage?> watch(Event event) =>
@@ -191,8 +227,9 @@ final class UndecryptableMessages extends ChangeNotifier {
   }
 
   void _start(Event event, String key) {
-    final run = (_runs[key] ?? 0) + 1;
+    final run = (_runs.remove(key) ?? 0) + 1;
     _runs[key] = run;
+    _forgetIdleSessions(except: key);
     _timers.remove(key)?.cancel();
     if (!backend.available || !requestable(event)) {
       _set(key, KeyRecoveryStage.permanent);
@@ -200,6 +237,7 @@ final class UndecryptableMessages extends ChangeNotifier {
     }
     final room = event.room;
     _listen(room);
+    _running.add(key);
     unawaited(
       _run(
         key,
@@ -207,7 +245,12 @@ final class UndecryptableMessages extends ChangeNotifier {
         room,
         _session(event)!,
         event.content.tryGet<String>('sender_key'),
-      ),
+      ).whenComplete(() {
+        if (_runs[key] != run) return;
+        _running.remove(key);
+        // A burst of requests (Try again on a whole chat) ends here.
+        _forgetIdleSessions(except: key);
+      }),
     );
   }
 
@@ -289,4 +332,11 @@ final class UndecryptableMessages extends ChangeNotifier {
     }
     super.dispose();
   }
+}
+
+/// A stage that knows whether a bubble listens to it.
+final class _StageNotifier extends ValueNotifier<KeyRecoveryStage?> {
+  _StageNotifier() : super(null);
+
+  bool get watched => hasListeners;
 }

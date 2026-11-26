@@ -147,6 +147,54 @@ class MxcImage extends StatefulWidget {
   /// Drops parsed Lottie stickers (tests, memory pressure).
   static void clearLottieCache() => _MxcImageState._lottieCache.clear();
 
+  /// Encoded bytes kept by [trimMemory] in the background: the most recently
+  /// shown thumbnails and avatars, next to where the user left off.
+  static const int backgroundRetainedBytes = 4 * 1024 * 1024;
+
+  /// Releases memory-only copies that are rebuilt without the network.
+  ///
+  /// Parsed Lottie stickers always go (re-parsed from their bytes). Under
+  /// memory pressure every retained encoded image goes as well. With
+  /// [background], only entries whose source has a disk cache (the SQLCipher
+  /// media cache or a custom loader's own cache) are trimmed, down to
+  /// [backgroundRetainedBytes]. Mounted images keep their own bytes and
+  /// frames either way.
+  static void trimMemory({bool background = false}) {
+    _MxcImageState._lottieCache.clear();
+    if (!background) {
+      _MxcImageState._imageDataCache.clear();
+      return;
+    }
+    _MxcImageState._imageDataCache.trimTo(
+      backgroundRetainedBytes,
+      evictable: _MxcImageState._diskBacked,
+    );
+  }
+
+  @visibleForTesting
+  static int get debugRetainedBytes =>
+      _MxcImageState._imageDataCache.retainedBytes;
+
+  @visibleForTesting
+  static int get debugRetainedEntries => _MxcImageState._imageDataCache.length;
+
+  @visibleForTesting
+  static int get debugParsedLottie => _MxcImageState._lottieCache.length;
+
+  /// Whether [bytes] could be a Lottie sticker: gzip (TGS) or text starting
+  /// with `{`. Images fail this at once, so they never pay for a parse (or
+  /// a background isolate and a copy of their bytes) to find out.
+  static bool mayBeLottie(Uint8List bytes) {
+    if (bytes.length > 2 && bytes[0] == 0x1f && bytes[1] == 0x8b) return true;
+    for (final byte in bytes) {
+      if (byte == 0x20 || byte == 0x0a || byte == 0x0d || byte == 0x09) {
+        continue;
+      }
+      return byte == 0x7b;
+    }
+    return false;
+  }
+
   /// Encoded bytes another [MxcImage] already holds in memory for [event]'s
   /// media (a timeline bubble, the media grid), whatever size it asked for;
   /// the largest copy wins. Lets the photo viewer start from the picture the
@@ -484,6 +532,16 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   static bool _isRound(Event event) =>
       RoundVideoDescriptor.fromContent(event.content) != null;
 
+  /// Reloading [key] reads a disk cache rather than the network.
+  static bool _diskBacked(_ImageKey key) {
+    if (key.$10 != null) return true;
+    try {
+      return key.$12.$3.supportsFileStoring;
+    } catch (_) {
+      return false;
+    }
+  }
+
   _LottieKey? _lottieKey(Client client) {
     final source = widget.uri?.toString() ?? widget.event?.eventId;
     return source == null
@@ -557,7 +615,9 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     final lottieKey = _lottieKey(client);
     final composition =
         (lottieKey == null ? null : _lottieCache.get(lottieKey)) ??
-        await LottieStickerData.decode(data);
+        (MxcImage.mayBeLottie(data)
+            ? await LottieStickerData.decode(data)
+            : null);
     if (composition == null) return false;
     if (!mounted || generation != _generation) return true;
     if (_sourceBlocked || _accountChanged) {
@@ -890,10 +950,11 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
       final lottie = lottieKey == null ? null : _lottieCache.get(lottieKey);
       // Synchronous memory hit: no post-frame load, no fade-in on rebuilds
       // and list reorders. A Lottie sticker needs its parsed composition
-      // too; without it the bytes are parsed once by the load below.
+      // too; without it the bytes are parsed once by the load below (a
+      // header sniff here: never a synchronous gunzip during build).
       if (cached != null &&
           !(widget.event != null && _isRound(widget.event!)) &&
-          (lottie != null || LottieStickerData.jsonBytes(cached) == null)) {
+          (lottie != null || !MxcImage.mayBeLottie(cached))) {
         _imageData = cached;
         _lottie = lottie;
         _fromCache = true;
@@ -947,10 +1008,7 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
   }
 
   @override
-  void didHaveMemoryPressure() {
-    _imageDataCache.removeWhere((_) => true);
-    _lottieCache.clear();
-  }
+  void didHaveMemoryPressure() => MxcImage.trimMemory();
 
   @override
   void didUpdateWidget(MxcImage oldWidget) {
@@ -1005,11 +1063,14 @@ class _MxcImageState extends State<MxcImage> with WidgetsBindingObserver {
     final data = blocked ? null : _imageData;
     final hasData = data != null && data.isNotEmpty;
     final lottie = _lottie;
+    // Every image with a known box decodes at that box in physical pixels
+    // (never upscaled): originals too, such as custom emoji in reactions,
+    // the composer and HTML, which used to decode a 512 px sticker for a
+    // 20 dp glyph. Viewers without a box use [MxcImage.maxDecodeSide].
+    // Animated images play at their encoded size: the engine ignores a
+    // target size for multi-frame codecs.
     int? decodeSize(double? logical) {
-      if (!widget.isThumbnail ||
-          logical == null ||
-          !logical.isFinite ||
-          logical <= 0) {
+      if (logical == null || !logical.isFinite || logical <= 0) {
         return null;
       }
       return max(1, (logical * MediaQuery.devicePixelRatioOf(context)).ceil());

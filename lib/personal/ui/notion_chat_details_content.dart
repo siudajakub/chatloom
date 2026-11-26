@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
+import 'dart:math' show max;
 
 import 'package:chatloom/pages/chat/conversation_navigation.dart'
     show ConversationJumpTargets;
@@ -355,6 +356,35 @@ Object _mediaHeroTag(Event event) => ('details-media', event.eventId);
 /// Memory-cache key of a details thumbnail, so the flying copy of the
 /// thumbnail (the hero shuttle) paints from the first frame.
 String _thumbnailCacheKey(Event event) => 'details:${event.eventId}';
+
+/// Logical decode box of a media grid tile [side] wide, for an image that
+/// covers it (`BoxFit.cover`). `MxcImage` decodes to fit inside this box,
+/// so the box is stretched along the image's longer side: its shorter side
+/// then lands on [side] instead of being upscaled (blurred). Without a
+/// known aspect ratio the box is 2 × [side], enough up to 2:1 (the old fixed
+/// 240 dp box). [side] is rounded up to 16 dp so resizing a window does not
+/// decode the tile again on every pixel.
+@visibleForTesting
+(double, double) sharedMediaDecodeBox(
+  Map<String, Object?> content,
+  double side,
+) {
+  const fallback = 240.0;
+  if (!side.isFinite || side <= 0) return (fallback, fallback);
+  final step = (side / 16).ceil() * 16.0;
+  final info = content['info'];
+  final thumb = info is Map ? info['thumbnail_info'] : null;
+  num? dimension(String key) {
+    final value =
+        (thumb is Map ? thumb[key] : null) ?? (info is Map ? info[key] : null);
+    return value is num && value > 0 ? value : null;
+  }
+
+  final w = dimension('w'), h = dimension('h');
+  if (w == null || h == null) return (step * 2, step * 2);
+  final aspect = (w / h).clamp(1 / 3, 3.0);
+  return (step * max(1.0, aspect), step * max(1.0, 1 / aspect));
+}
 
 /// A details thumbnail the full-screen viewer flies out of and back into.
 class _MediaSource extends StatelessWidget {
@@ -1100,6 +1130,9 @@ class _NotionConversationContentPageState
                   (MediaQuery.textScalerOf(context).scale(1) > 1.5 ? 150 : 120))
               .floor()
               .clamp(2, 6);
+      // Square tiles: 20 dp side padding, 4 dp between columns.
+      final tileSide =
+          (constraints.maxWidth - 2 * 20 - 4 * (columns - 1)) / columns;
       final media = events.where(sharedMedia).toList();
       final months = groupSharedMediaByMonth(media);
       final loading = _loading(media.isEmpty);
@@ -1140,6 +1173,15 @@ class _NotionConversationContentPageState
                 delegate: SliverChildBuilderDelegate((context, index) {
                   final event = monthEvents[index];
                   final video = event.messageType == MessageTypes.Video;
+                  // Decoded for the tile it fills (about 120 dp), not a
+                  // fixed 240 dp box. Sized from the grid, not a
+                  // LayoutBuilder in the tile: the tile is also the hero
+                  // shuttle, which must not decode again at every size of
+                  // its flight.
+                  final (decodeWidth, decodeHeight) = sharedMediaDecodeBox(
+                    event.content,
+                    tileSide,
+                  );
                   // Tiles of the first screenful grow in; later ones do not.
                   return NotionEntrance(
                     playKey: event.eventId,
@@ -1166,8 +1208,8 @@ class _NotionConversationContentPageState
                                     event: event,
                                     child: MxcImage(
                                       event: event,
-                                      width: 240,
-                                      height: 240,
+                                      width: decodeWidth,
+                                      height: decodeHeight,
                                       fit: BoxFit.cover,
                                       isThumbnail: true,
                                       animated: false,

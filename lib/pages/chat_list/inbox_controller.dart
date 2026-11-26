@@ -19,7 +19,10 @@ import 'package:matrix/matrix.dart';
 /// * Sync updates recompute only the rooms listed in `SyncUpdate.rooms`
 ///   (whole index for new/left rooms, merged persons, spaces or new bridges).
 /// * Personal store changes rebuild the index (private metadata may affect
-///   every record).
+///   every record), except draft-only changes: a composer saving its draft
+///   refreshes that conversation's record in place ([InboxIndex.updateDrafts]).
+/// * Views re-filter and re-sort only when [selectionGeneration] moves; the
+///   network list is rescanned only when a changed room's networks moved.
 /// * A change to a quiet inbox (no refresh within [debounce]) is published
 ///   at once, so a single new message shows without delay. Changes right
 ///   after a refresh are coalesced: [debounce] after the last change, at
@@ -45,7 +48,7 @@ class InboxController extends ChangeNotifier {
     _subscriptions.addAll([
       client.onSync.stream.listen(_onSync, onError: (_) {}),
       client.onSyncStatus.stream.listen(_onStatus, onError: (_) {}),
-      personal.changes.listen(_onPersonalChange, onError: (_) {}),
+      personal.changeDetails.listen(_onPersonalChange, onError: (_) {}),
       client.onRoomState.stream.listen(_onRoomState, onError: (_) {}),
       // A bridge report about a row's last own message (delivery ticks).
       BridgeDeliveryLedger.of(
@@ -124,14 +127,27 @@ class InboxController extends ChangeNotifier {
     }
   }
 
-  int? _seenContent;
+  /// A worker heartbeat or diagnostic changes no inbox row: skip it. A
+  /// draft save (every composer pause while typing, and its journal echo)
+  /// refreshes only its conversation's row; anything else may affect every
+  /// record and rebuilds the index.
+  void _onPersonalChange(PersonalChange change) {
+    if (!change.content) return;
+    if (change.draftsOnly) {
+      _markDrafts(change.entities!);
+    } else {
+      _mark(all: true);
+    }
+  }
 
-  /// A worker heartbeat or diagnostic changes no inbox row: skip it.
-  void _onPersonalChange(int _) {
-    final revision = personal.contentRevision;
-    if (revision == _seenContent) return;
-    _seenContent = revision;
-    _mark(all: true);
+  // Draft entities (`draft:<room>`, `draft:person:<id>`) changed since the
+  // last refresh.
+  final _drafts = <String>{};
+
+  void _markDrafts(Iterable<String> entities) {
+    if (_detached) return;
+    _drafts.addAll(entities);
+    _mark();
   }
 
   /// A DM's name and avatar come from the partner's member event, which is
@@ -166,11 +182,22 @@ class InboxController extends ChangeNotifier {
   List<String> _networks = const [];
   bool _failed = false, _loading = true;
 
-  /// Increments on every published change; part of selection memo keys.
+  /// Increments on every published change (rows read live room data).
   int generation = 0;
 
-  /// Index (re)builds, incremental updates; performance tests.
-  int debugFullBuilds = 0, debugIncrementalUpdates = 0;
+  /// Increments only when a published change may alter which rows a view
+  /// selects or their order: a new index, or an incremental update that
+  /// changed a record's selection fields ([InboxIndex.sameSelection]).
+  /// Selection memo keys use it, so a receipt, a delivery tick, an edit or
+  /// a status flip republishes without filtering and sorting the inbox.
+  int selectionGeneration = 0;
+
+  /// Index (re)builds, incremental updates, network list scans, in-place
+  /// draft updates; performance tests.
+  int debugFullBuilds = 0,
+      debugIncrementalUpdates = 0,
+      debugNetworkScans = 0,
+      debugDraftUpdates = 0;
 
   bool _visible = true;
   int _holds = 0;
@@ -217,7 +244,8 @@ class InboxController extends ChangeNotifier {
   /// True once [detach] or [dispose] ran (no more subscriptions).
   bool get detached => _detached;
 
-  bool get _pending => _all || _touched || _changed.isNotEmpty;
+  bool get _pending =>
+      _all || _touched || _changed.isNotEmpty || _drafts.isNotEmpty;
 
   /// True until the first sync finished.
   bool get loading => _hydrating || (client.prevBatch == null && !_failed);
@@ -366,18 +394,40 @@ class InboxController extends ChangeNotifier {
     _cooldown?.cancel();
     _cooldown = Timer(debounce, () => _cooldown = null);
     final changed = _changed.toList();
+    final drafts = _drafts.toList();
     final all = _all;
     _changed.clear();
+    _drafts.clear();
     _all = _touched = false;
-    final index = _index;
+    var index = _index;
+    if (index != null && !all && drafts.isNotEmpty) {
+      final selection = index.selectionRevision;
+      if (index.updateDrafts(drafts)) {
+        debugDraftUpdates++;
+        if (index.selectionRevision != selection) selectionGeneration++;
+      } else {
+        _rebuild();
+        // The new index already holds the changed rooms.
+        changed.clear();
+        index = null;
+      }
+    }
     if (index != null && !all && changed.isNotEmpty) {
+      final selection = index.selectionRevision;
+      final networks = index.networkRevision;
       if (index.updateRooms(changed, client.rooms)) {
         debugIncrementalUpdates++;
         for (final id in changed) {
           final room = client.getRoomById(id);
           if (room != null) _unreadStates[id] = _unreadState(room);
         }
-        _networks = _computeNetworks(index);
+        if (index.selectionRevision != selection) selectionGeneration++;
+        // Classifying every room hashes each room's member states: only a
+        // changed room whose networks or technical flag moved can change
+        // the list (an incremental update never touches merged persons).
+        if (index.networkRevision != networks) {
+          _networks = _computeNetworks(index);
+        }
       } else {
         _rebuild();
       }
@@ -391,6 +441,7 @@ class InboxController extends ChangeNotifier {
 
   void _rebuild() {
     debugFullBuilds++;
+    selectionGeneration++;
     final index = InboxProjection.snapshot(
       personal,
     ).buildIndex(client.rooms, previous: _index);
@@ -430,7 +481,8 @@ class InboxController extends ChangeNotifier {
     });
   }
 
-  static List<String> _computeNetworks(InboxIndex index) {
+  List<String> _computeNetworks(InboxIndex index) {
+    debugNetworkScans++;
     final projection = index.projection;
     final networks = <String>{};
     for (final room in index.rooms) {

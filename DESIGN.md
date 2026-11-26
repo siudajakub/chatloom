@@ -90,7 +90,7 @@ All tokens live in `lib/ui/notion/notion_tokens.dart`.
 | `accent` / `onAccent` | from the palette | accent as a foreground on the page (links, active icons, typing line, cursor, sliders); = text for Graphite. Filled controls use `palette.accentFill` |
 | `danger` `success` `warning` `info` | red/green/amber/blue | status only, never decoration |
 | `scrim` | 60% black | modal barrier |
-| `NotionMediaColors.scrim` / `stageScrim` / `onScrim` | 45% / 72% black, white | over video frames only (round pills and glyphs, media stage barrier); fixed in both themes |
+| `NotionMediaColors.scrim` / `stageScrim` / `onScrim` | 45% / 72% black, white | over video frames only (round pills and glyphs); the full-screen media stage barrier is the opaque `NotionMediaColors.viewer`; fixed in both themes |
 
 Message bubbles use the `ConversationBubbleColors` extension
 (`ConversationBubbleColors.of(context)`); it is registered by `NotionTheme`,

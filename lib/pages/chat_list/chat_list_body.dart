@@ -30,6 +30,25 @@ class ChatListViewBody extends StatefulWidget {
 class _ChatListViewBodyState extends State<ChatListViewBody> {
   Object? _prefetchKey;
 
+  // Derived from the selected rooms; reused while the selection is the same
+  // list (most publishes change rows, not the order), so the list motion
+  // compares the order by identity and nothing is reallocated.
+  List<Room>? _orderOf;
+  List<String> _order = const [];
+  Map<String, int> _positions = const {};
+
+  // The status rows listen to their own sources: one instance per account,
+  // so an inbox publish does not rebuild them.
+  Client? _statusClient;
+  Widget? _status, _headerStatus;
+
+  void _deriveOrder(List<Room> rooms) {
+    if (identical(rooms, _orderOf)) return;
+    _orderOf = rooms;
+    _order = List.unmodifiable([for (final room in rooms) room.id]);
+    _positions = {for (final (index, id) in _order.indexed) id: index};
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -68,9 +87,13 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
                   ),
                 )
                 .toList();
-        final positions = <String, int>{
-          for (final (index, room) in rooms.indexed) room.id: index,
-        };
+        _deriveOrder(rooms);
+        final positions = _positions;
+        if (!identical(_statusClient, client)) {
+          _statusClient = client;
+          _status = InboxHealthStatus(key: ValueKey(client), client: client);
+          _headerStatus = ConnectionStatusLine(client: client);
+        }
         controller.rowMemo.retain(rooms.length);
         // Resolve ahead-of-screen avatars once per selection/data change,
         // after the current frame. Parent builds, deleted-preview notices and
@@ -100,7 +123,7 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
           requestCount: usable ? controller.requestViewCount() : 0,
           scrollController: controller.scrollController,
           rowCount: rooms.length,
-          rowOrder: [for (final room in rooms) room.id],
+          rowOrder: _order,
           rowBuilder: (context, index) {
             final room = rooms[index];
             final entity = projection.entityFor(room);
@@ -168,8 +191,8 @@ class _ChatListViewBodyState extends State<ChatListViewBody> {
               : 'No chats yet. Use Search to find people on your networks.',
           // Connection, encryption and private sync, bridges, push and the
           // worker in one row; it takes no space while there is nothing to say.
-          status: InboxHealthStatus(key: ValueKey(client), client: client),
-          headerStatus: ConnectionStatusLine(client: client),
+          status: _status,
+          headerStatus: _headerStatus,
           onSettings: () => context.go('/rooms/settings'),
           // Search is also where new chats start (no separate compose button).
           onSearch: controller.openSearch,

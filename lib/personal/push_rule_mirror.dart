@@ -454,12 +454,12 @@ class PushRuleMirror {
           ? chatLoomPushRuleTarget(personal)
           : null,
     );
-    var revision = -1;
     final attached = _Attached(mirror)
-      ..changes = personal.changes.listen((_) {
-        // Pure status updates (worker heartbeat) change no mute.
-        if (personal.contentRevision == revision) return;
-        revision = personal.contentRevision;
+      ..changes = personal.changeDetails.listen((change) {
+        // Pure status updates (worker heartbeat) and draft saves (every
+        // typing pause) change no mute. Each notification is its own
+        // event, so a mute change is never hidden behind a later draft.
+        if (!change.content || change.draftsOnly) return;
         mirror.schedule();
       })
       ..rules = client.onSync.stream
@@ -507,7 +507,7 @@ class PushRuleMirror {
 
 class _Attached {
   final PushRuleMirror mirror;
-  StreamSubscription<int>? changes;
+  StreamSubscription<PersonalChange>? changes;
   StreamSubscription<SyncUpdate>? rules;
   StreamSubscription<SyncUpdate>? polls;
   _Attached(this.mirror);

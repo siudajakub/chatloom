@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 /// Native players can acknowledge play before rendering a frame, and a seek
 /// can leave a positive position while paused. Played intent needs new progress
@@ -221,6 +224,63 @@ class RoundPlaybackCoordinator {
       _stopFailed = false;
     });
   }
+
+  /// How long the window may be out of sight before [stopWhileWindowHidden]
+  /// stops playback (Mission Control and Space switches flash it hidden).
+  static const windowHiddenGrace = Duration(seconds: 2);
+
+  /// macOS: the window can leave the screen (closed, minimised, covered,
+  /// another Space) without a `hidden` lifecycle: the engine reports the
+  /// lifecycle only on change, so a window launched behind others never
+  /// gets one. A native video player that is not composited keeps its
+  /// display link firing every vsync (and the raster thread redrawing) for
+  /// nobody. Once [visible] has been false for [grace] while the lifecycle
+  /// is not `hidden`/`paused` (the app lock already stopped everything
+  /// then), this does what a hidden lifecycle without a lock does:
+  /// [stopAll] with `retain` and `spareHidden`, so muted loops and rounds
+  /// stop, a viewer video pauses and keeps its position, and a voice note
+  /// keeps playing (MAC-04). Nothing resumes by itself.
+  ///
+  /// Returns the function that stops watching. [lifecycle] replaces the
+  /// binding's state (tests).
+  VoidCallback stopWhileWindowHidden(
+    ValueListenable<bool> visible, {
+    Duration grace = windowHiddenGrace,
+    AppLifecycleState? Function()? lifecycle,
+  }) {
+    Timer? timer;
+    void check() {
+      if (visible.value) {
+        timer?.cancel();
+        timer = null;
+        return;
+      }
+      timer ??= Timer(grace, () {
+        timer = null;
+        if (visible.value) return;
+        final state = (lifecycle ?? _lifecycle)();
+        if (state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.paused ||
+            state == AppLifecycleState.detached) {
+          return;
+        }
+        unawaited(
+          stopAll(retain: true, spareHidden: true).catchError((Object _) {}),
+        );
+      });
+    }
+
+    visible.addListener(check);
+    check();
+    return () {
+      visible.removeListener(check);
+      timer?.cancel();
+      timer = null;
+    };
+  }
+
+  static AppLifecycleState? _lifecycle() =>
+      SchedulerBinding.instance.lifecycleState;
 
   /// Returning to foreground/unlocking permits a new explicit play action.
   /// This method never resumes a player or flushes a played receipt.

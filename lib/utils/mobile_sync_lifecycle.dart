@@ -56,11 +56,46 @@ class MobileSyncLifecycle {
   /// Whether the loop runs now; null before the first state is known.
   bool? get foreground => _foreground;
 
-  /// Records the state the app starts in without touching the loop (the
-  /// startup already started it).
+  /// Clients whose loop [holdWhileAway] keeps off.
+  static final _held = Expando<bool>('mobile sync held');
+
+  /// Startup half of the policy (2026-11-26). A client that finishes
+  /// restoring while the app is off screen (the user left during start-up,
+  /// or the background-fetch engine got an Activity that never came to the
+  /// front) has its loop kept off. Its init started the loop, and no GUI
+  /// existed to stop it: the GUI is built on a frame, and Flutter draws no
+  /// frames in the background, so the loop long-polled every 30 s until the
+  /// app was shown again. [seed], or the next change to a state on screen,
+  /// starts it with a catch-up. Returns whether the loop is held; an unknown
+  /// [state] never holds it.
+  static bool holdWhileAway(Client client, AppLifecycleState? state) {
+    if (state == null || syncsIn(state)) return false;
+    _held[client] = true;
+    client.backgroundSync = false;
+    return true;
+  }
+
+  /// Whether [holdWhileAway] keeps [client]'s loop off.
+  static bool isHeld(Client client) => _held[client] ?? false;
+
+  /// Records the state the app starts in. On screen, a running loop is left
+  /// as it is (the startup started it) and one [holdWhileAway] kept off
+  /// starts with a catch-up. Off screen (the background-fetch engine's
+  /// Activity went straight to the background) every loop stops, as on any
+  /// later change to the background.
   void seed(AppLifecycleState? state) {
-    if (state == null) return;
-    _foreground ??= syncsIn(state);
+    if (state == null || _foreground != null) return;
+    final foreground = _foreground = syncsIn(state);
+    for (final client in clients()) {
+      if (!foreground) {
+        _held[client] = null;
+        _monitorOf(client).background();
+        _apply(client, foreground: false);
+      } else if (isHeld(client)) {
+        _held[client] = null;
+        _apply(client, foreground: true, catchUp: true);
+      }
+    }
   }
 
   void onLifecycle(AppLifecycleState state) {
@@ -70,12 +105,14 @@ class MobileSyncLifecycle {
     _foreground = foreground;
     final back = foreground && previous == false;
     for (final client in clients()) {
+      final held = isHeld(client);
+      _held[client] = null;
       final monitor = _monitorOf(client);
       if (!foreground) {
         monitor.background();
         _apply(client, foreground: false);
       } else if (!back) {
-        _apply(client, foreground: true);
+        _apply(client, foreground: true, catchUp: held);
       } else {
         // Before the catch-up reports anything.
         monitor.resumed(

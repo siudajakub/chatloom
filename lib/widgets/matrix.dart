@@ -404,7 +404,7 @@ class MatrixState extends State<Matrix> {
   }
 
   AppLifecycleListener? _listener;
-  StreamSubscription<List<ConnectivityResult>>? _networkChanges;
+  NetworkWatch? _networkWatch;
 
   @override
   void didUpdateWidget(covariant Matrix oldWidget) {
@@ -587,17 +587,26 @@ class MatrixState extends State<Matrix> {
               )
             : !(_desktopSyncPause?.paused ?? false),
       );
-      _networkChanges = Connectivity().onConnectivityChanged.listen(
-        (networks) => unawaited(
+      final watch = _networkWatch = NetworkWatch(
+        changes: () => Connectivity().onConnectivityChanged,
+        onNetworks: (networks) => unawaited(
           recovery
               .onNetworksChanged(widget.clients, networks)
               .catchError((Object _) {}),
         ),
-        onError: (Object _, StackTrace _) {
+        onStart: recovery.reset,
+        onError: () {
           // Keep automatic retries if the optional platform watcher is unavailable.
           Logs().w('Network recovery watcher unavailable');
         },
       );
+      // Phones watch only while the loop runs (see [NetworkWatch]); an
+      // unknown state keeps watching, as before the first lifecycle report.
+      final state = WidgetsBinding.instance.lifecycleState;
+      watch.active =
+          !PlatformInfos.isMobile ||
+          state == null ||
+          MobileSyncLifecycle.syncsIn(state);
     }
     if (PlatformInfos.isMobile) {
       for (final client in widget.clients) {
@@ -663,6 +672,10 @@ class MatrixState extends State<Matrix> {
     // Phones: the loop runs only on screen, with short retries there, and
     // catches up at once on return (see [MobileSyncLifecycle]).
     _mobileSync?.onLifecycle(state);
+    // Network changes matter only to a running loop.
+    if (PlatformInfos.isMobile) {
+      _networkWatch?.active = MobileSyncLifecycle.syncsIn(state);
+    }
   }
 
   @override
@@ -678,7 +691,7 @@ class MatrixState extends State<Matrix> {
     }
     closeAudioPlayer();
     _listener?.dispose();
-    unawaited(_networkChanges?.cancel());
+    _networkWatch?.dispose();
     if (_desktopSyncPause case final pause?) {
       MacDesktopWindow.visible.removeListener(_onMacWindowVisible);
       pause.dispose();

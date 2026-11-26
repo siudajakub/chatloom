@@ -38,6 +38,7 @@ class NotionActivity extends StatefulWidget {
     super.key,
     required this.child,
     this.windowVisible,
+    this.windowActive,
     this.powerSaving,
   });
 
@@ -46,6 +47,13 @@ class NotionActivity extends StatefulWidget {
   /// Whether the native window is on screen (macOS occlusion/minimise);
   /// null where the lifecycle alone decides.
   final ValueListenable<bool>? windowVisible;
+
+  /// Whether the native window has focus (macOS: app active, window key or
+  /// main). Consulted only while the engine has not reported a lifecycle
+  /// state (null at startup until the first change): then a visible but
+  /// unfocused window is not in front. Once a state is known it decides,
+  /// as it reports focus itself (`inactive`).
+  final ValueListenable<bool>? windowActive;
 
   /// Whether the system saves power; null where it is not reported.
   final ValueListenable<bool>? powerSaving;
@@ -85,6 +93,7 @@ class _NotionActivityState extends State<NotionActivity> {
     _state = WidgetsBinding.instance.lifecycleState;
     _lifecycle = AppLifecycleListener(onStateChange: _onState);
     widget.windowVisible?.addListener(_changed);
+    widget.windowActive?.addListener(_changed);
     widget.powerSaving?.addListener(_changed);
   }
 
@@ -94,6 +103,10 @@ class _NotionActivityState extends State<NotionActivity> {
     if (oldWidget.windowVisible != widget.windowVisible) {
       oldWidget.windowVisible?.removeListener(_changed);
       widget.windowVisible?.addListener(_changed);
+    }
+    if (oldWidget.windowActive != widget.windowActive) {
+      oldWidget.windowActive?.removeListener(_changed);
+      widget.windowActive?.addListener(_changed);
     }
     if (oldWidget.powerSaving != widget.powerSaving) {
       oldWidget.powerSaving?.removeListener(_changed);
@@ -105,6 +118,7 @@ class _NotionActivityState extends State<NotionActivity> {
   void dispose() {
     _pointerTimer?.cancel();
     widget.windowVisible?.removeListener(_changed);
+    widget.windowActive?.removeListener(_changed);
     widget.powerSaving?.removeListener(_changed);
     _lifecycle.dispose();
     super.dispose();
@@ -118,7 +132,8 @@ class _NotionActivityState extends State<NotionActivity> {
   void _changed() => setState(() {});
 
   bool get _foreground =>
-      (_state == null || _state == AppLifecycleState.resumed) &&
+      (_state == AppLifecycleState.resumed ||
+          (_state == null && (widget.windowActive?.value ?? true))) &&
       (widget.windowVisible?.value ?? true);
 
   void _onPointer(PointerEvent _) {

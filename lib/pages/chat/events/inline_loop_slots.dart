@@ -8,6 +8,14 @@ abstract final class InlineLoopSlots {
   /// Native players alive at once across the app.
   static const max = 3;
 
+  /// How long a paused loop keeps its native player. A paused player whose
+  /// texture was not drawn since it was created (offstage, a hidden window,
+  /// a route on top) keeps the macOS/iOS plugin's display link firing every
+  /// vsync until a frame is drawn (video_player_avfoundation `expectFrame`),
+  /// and every paused player holds a decoder. Past this grace the loop shows
+  /// its poster and starts again when it may play.
+  static const idleRelease = Duration(seconds: 10);
+
   /// Owner → its give-way callback, oldest first.
   static final _live = <Object, VoidCallback>{};
 

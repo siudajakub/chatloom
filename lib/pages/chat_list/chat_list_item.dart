@@ -95,11 +95,34 @@ List<Room> _rowSources(InboxProjection projection, Room room) {
             .toList();
 }
 
+/// The draft a row previews (the entity's, else a source chat's) and
+/// whether one of them is in conflict.
+({String? draft, bool conflict}) _rowDraft(
+  PersonalClient personal,
+  InboxProjection projection,
+  Room room,
+  List<Room> sources,
+) {
+  final entity = projection.entityFor(room);
+  final keys = [
+    'draft:$entity',
+    for (final source in sources) 'draft:${source.id}',
+  ];
+  return (
+    draft: keys
+        .map((key) => personal.values[key]?['text'])
+        .whereType<String>()
+        .where((text) => text.isNotEmpty)
+        .firstOrNull,
+    conflict: keys.any(personal.conflicts.containsKey),
+  );
+}
+
 /// Everything a [ChatListItem] reads that can change without a new inbox
-/// [projection] (a sync of one room reuses it; every private change builds
-/// a new one). The inbox keeps a built row while this stays equal, so a
-/// publish rebuilds only rows that changed (Telegram's per-cell update
-/// mask). Keep it in step with [_ChatListItemState.build].
+/// [projection] (a sync of one room or a draft save reuses it; every other
+/// private change builds a new one). The inbox keeps a built row while this
+/// stays equal, so a publish rebuilds only rows that changed (Telegram's
+/// per-cell update mask). Keep it in step with [_ChatListItemState.build].
 List<Object?> chatListItemSignature(
   Room room,
   InboxProjection projection, {
@@ -108,9 +131,15 @@ List<Object?> chatListItemSignature(
   bool showNetworks = false,
 }) {
   final now = DateTime.now();
+  final sources = _rowSources(projection, room);
+  final draft = _rowDraft(projection.personal, projection, room, sources);
   return [
     room,
     projection,
+    // A draft saved in place (the index is kept, see
+    // [InboxIndex.updateDrafts]) still updates its row's preview.
+    draft.draft,
+    draft.conflict,
     activeChat,
     flash,
     showNetworks,
@@ -119,7 +148,7 @@ List<Object?> chatListItemSignature(
     room.membership,
     projection.displayName(room),
     projection.avatarFor(room),
-    for (final source in _rowSources(projection, room)) ...[
+    for (final source in sources) ...[
       source.id,
       source.notificationCount,
       source.highlightCount,
@@ -383,20 +412,7 @@ class _ChatListItemState extends State<ChatListItem> {
       activity,
       sourceLabels: projection.groupFor(room) != null,
     );
-    final draftValues = [
-      personal.values['draft:${projection.entityFor(room)}'],
-      ...sources.map((source) => personal.values['draft:${source.id}']),
-    ];
-    final draft = draftValues
-        .map((value) => value?['text'])
-        .whereType<String>()
-        .where((text) => text.isNotEmpty)
-        .firstOrNull;
-    final conflict =
-        personal.conflicts.containsKey('draft:${projection.entityFor(room)}') ||
-        sources.any(
-          (source) => personal.conflicts.containsKey('draft:${source.id}'),
-        );
+    final (:draft, :conflict) = _rowDraft(personal, projection, room, sources);
     final l10n = L10n.of(context);
     final nativeRules = sources.map(accountPushRuleState).toSet();
     final nativeLimited = nativeRules.any(

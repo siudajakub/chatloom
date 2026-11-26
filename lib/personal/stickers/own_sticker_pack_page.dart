@@ -294,8 +294,16 @@ class _OwnStickerPackPageState extends State<OwnStickerPackPage> {
 
   Widget _draftImage(Uint8List bytes) => ClipRRect(
     borderRadius: NotionRadius.xsAll,
-    child: Image.memory(
-      bytes,
+    child: Image(
+      // An imported photo decodes at the row's icon size, not in full.
+      image: ResizeImage(
+        MemoryImage(bytes),
+        width: (NotionSize.iconLg * MediaQuery.devicePixelRatioOf(context))
+            .ceil(),
+        height: (NotionSize.iconLg * MediaQuery.devicePixelRatioOf(context))
+            .ceil(),
+        policy: ResizeImagePolicy.fit,
+      ),
       width: NotionSize.iconLg,
       height: NotionSize.iconLg,
       fit: BoxFit.contain,

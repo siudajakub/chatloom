@@ -45,4 +45,20 @@ class BoundedByteCache<K> {
       _bytes -= _entries.remove(key)!.length;
     }
   }
+
+  void clear() {
+    _entries.clear();
+    _bytes = 0;
+  }
+
+  /// Drops least recently used entries the [evictable] test allows until at
+  /// most [bytes] remain (or nothing evictable is left).
+  void trimTo(int bytes, {bool Function(K key)? evictable}) {
+    if (_bytes <= bytes) return;
+    for (final key in _entries.keys.toList()) {
+      if (_bytes <= bytes) return;
+      if (evictable != null && !evictable(key)) continue;
+      _bytes -= _entries.remove(key)!.length;
+    }
+  }
 }

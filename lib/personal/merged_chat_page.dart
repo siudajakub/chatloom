@@ -443,8 +443,228 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _awaySince = null;
+      _boundAbortedAt = null;
+    } else {
+      _awaySince ??= ChatController.debugNow();
+    }
     if (state == AppLifecycleState.resumed) _scheduleVisibilityScan();
     if (state != AppLifecycleState.resumed) _stopTyping();
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      _flushDraft();
+      _maybeBoundTimelines();
+    }
+  }
+
+  /// Saves a draft still waiting for its typing pause at once (the app is
+  /// being hidden and may be stopped before the pause ends).
+  void _flushDraft() {
+    if (!(_draftTimer?.isActive ?? false)) return;
+    _draftTimer!.cancel();
+    unawaited(_draft());
+  }
+
+  // ---------------------------------------------------------------------
+  // Bounded source timelines (long-running sessions), as in the ordinary
+  // chat ([ChatController.boundedTimelineEvents]): while the app is away, a
+  // source timeline that grew far beyond what the screen needs is replaced
+  // by a fresh load of its newest events, only when the merged rows on and
+  // around the screen stay exactly the same.
+
+  DateTime? _awaySince;
+  bool _bounding = false;
+
+  /// Events loaded in all sources when a read reload was not adopted; it is
+  /// retried only after 50 more (see the ordinary chat).
+  int? _boundAbortedAt;
+
+  int get _loadedEvents =>
+      timelines.values.fold(0, (sum, t) => sum + t.events.length);
+
+  bool get _boundable =>
+      mounted &&
+      _awaySince != null &&
+      !loading &&
+      !historyLoading &&
+      !_searching &&
+      scrollToEventIdMarker == null &&
+      _pendingEvent == null &&
+      !_hold.value &&
+      scrollController.hasClients;
+
+  void _maybeBoundTimelines() {
+    final away = _awaySince;
+    if (_bounding || away == null || !_boundable) return;
+    final state = WidgetsBinding.instance.lifecycleState;
+    final hidden =
+        state == AppLifecycleState.hidden || state == AppLifecycleState.paused;
+    if (!hidden &&
+        ChatController.debugNow().difference(away) <
+            ChatController.boundTimelineAfter) {
+      return;
+    }
+    const window = ChatController.boundedTimelineEvents;
+    if (!timelines.values.any((t) => t.events.length > 2 * window)) return;
+    final aborted = _boundAbortedAt;
+    if (aborted != null && _loadedEvents < aborted + 50) return;
+    final builtAt = _oldestBuiltAt();
+    if (builtAt == null) return;
+    final bounds = _boundLimits(builtAt);
+    if (bounds.isEmpty) return;
+    unawaited(_boundTimelines(bounds));
+  }
+
+  /// When the oldest row the list has built (on screen or in its cache
+  /// extent) was sent, or null. Read from the built tags' row keys: while
+  /// paused no frame runs, so arrivals shift the indexes of built rows.
+  DateTime? _oldestBuiltAt() {
+    final built = ChatController.builtRowKeys(scrollController);
+    if (built.isEmpty) return null;
+    DateTime? oldest;
+    for (final t in timelines.values) {
+      for (final e in t.events) {
+        if (!built.contains(e.transactionId ?? e.eventId)) continue;
+        if (oldest == null || e.originServerTs.isBefore(oldest)) {
+          oldest = e.originServerTs;
+        }
+      }
+    }
+    return oldest;
+  }
+
+  /// Per source room: the newest events its timeline reloads to, and how
+  /// many of them are at or after [builtAt].
+  Map<String, ({int limit, int built})> _boundLimits(DateTime builtAt) {
+    const window = ChatController.boundedTimelineEvents;
+    final result = <String, ({int limit, int built})>{};
+    for (final entry in timelines.entries) {
+      final t = entry.value;
+      if (t.events.length <= 2 * window ||
+          !t.allowNewEvent ||
+          t.isRequestingHistory ||
+          t.isRequestingFuture) {
+        continue;
+      }
+      final built = t.events.indexWhere(
+        (e) => e.originServerTs.isBefore(builtAt),
+      );
+      if (built < 0) continue;
+      final limit = ChatController.boundedTimelineLimit(
+        t.events,
+        oldestBuilt: built,
+        readMarkerEventId: readMarkerEventId,
+      );
+      if (limit == null ||
+          t.events
+              .take(limit)
+              .any((e) => !e.status.isSynced && !e.status.isError)) {
+        continue;
+      }
+      result[entry.key] = (limit: limit, built: built);
+    }
+    return result;
+  }
+
+  Future<void> _boundTimelines(
+    Map<String, ({int limit, int built})> bounds,
+  ) async {
+    _bounding = true;
+    final generation = _generation;
+    final fresh = <String, Timeline>{};
+    void drop() {
+      for (final t in fresh.values) {
+        t.cancelSubscriptions();
+      }
+    }
+
+    try {
+      for (final entry in bounds.entries) {
+        final room = timelines[entry.key]?.room;
+        if (room == null) continue;
+        fresh[entry.key] = await room.getTimeline(
+          onNewEvent: () => _liveUpdatePending = true,
+          onUpdate: _timelineChanged,
+          limit: entry.value.limit,
+        );
+      }
+    } catch (_) {
+      // An optimization only: the sources keep their timelines.
+      drop();
+      return;
+    } finally {
+      _bounding = false;
+    }
+    final builtAt = _boundable && generation == _generation
+        ? _oldestBuiltAt()
+        : null;
+    if (builtAt == null) {
+      drop();
+      return;
+    }
+    final now = _boundLimits(builtAt);
+    final candidates = <String, Timeline>{};
+    for (final entry in fresh.entries) {
+      final old = timelines[entry.key];
+      final bound = now[entry.key];
+      if (old == null ||
+          bound == null ||
+          bound.limit > bounds[entry.key]!.limit ||
+          !ChatController.sameNewestEvents(
+            old,
+            entry.value,
+            bound.built + ChatController.boundCompared,
+          )) {
+        entry.value.cancelSubscriptions();
+        continue;
+      }
+      candidates[entry.key] = entry.value;
+    }
+    if (candidates.isEmpty) {
+      _boundAbortedAt = _loadedEvents;
+      return;
+    }
+    // The merged rows on and around the screen must stay the same rows.
+    _recomputeMerged();
+    final before = _rows;
+    final replaced = <String, Timeline>{
+      for (final entry in candidates.entries) entry.key: timelines[entry.key]!,
+    };
+    timelines.addAll(candidates);
+    _recomputeMerged();
+    final onScreen = before.indexWhere(
+      (row) => row.originServerTs.isBefore(builtAt),
+    );
+    final compared = math.min(
+      before.length,
+      (onScreen < 0 ? before.length : onScreen) + ChatController.boundCompared,
+    );
+    var same = _rows.length >= compared;
+    for (var i = 0; same && i < compared; i++) {
+      final a = _rows[i], b = before[i];
+      same =
+          _rowKey(a) == _rowKey(b) &&
+          (a.transactionId ?? a.eventId) == (b.transactionId ?? b.eventId);
+    }
+    if (!same) {
+      timelines.addAll(replaced);
+      for (final t in candidates.values) {
+        t.cancelSubscriptions();
+      }
+      _recomputeMerged();
+      _boundAbortedAt = _loadedEvents;
+      return;
+    }
+    _boundAbortedAt = null;
+    for (final old in replaced.values) {
+      old.cancelSubscriptions();
+    }
+    // Rows that left memory need no "already seen" record: if history
+    // brings them back they are older than everything seen.
+    final keys = {for (final row in _rows) _rowKey(row)};
+    _seenRows.retainWhere(keys.contains);
+    setState(() {});
   }
 
   // ---------------------------------------------------------------------
@@ -471,6 +691,13 @@ class _MergedChatPageState extends State<_MergedChatView>
 
   void _personalChanged() {
     if (!mounted) return;
+    // A draft save (this composer's own, every typing pause, and its journal
+    // echo) changes nothing the rows or the routing read: only a draft
+    // synced from another device is shown.
+    if (personal.lastChange.draftsOnly) {
+      _refreshSyncedDraft();
+      return;
+    }
     _routingCache = null;
     _refreshSyncedDraft();
     final signature = _computePersonalSignature();
@@ -918,10 +1145,17 @@ class _MergedChatPageState extends State<_MergedChatView>
     final draft = personal.values[key];
     final text = draft == null ? '' : draft['text'];
     if (text is! String || text == sendController.text) return;
-    setState(() => _showDraft(text, draft?['target']));
+    // Another device's draft only fills the idle composer: a missing or
+    // foreign source is shown by the composer's "Choose source" chip (send
+    // stays disabled until one is chosen), not by a header notice that
+    // would shift and rebuild every message row while the user only reads.
+    setState(() => _showDraft(text, draft?['target'], notice: false));
   }
 
-  void _showDraft(String text, Object? target) {
+  /// Shows [text] (with its saved [target]) in the composer. Without a usable
+  /// source the user must choose one before sending; [notice] also explains
+  /// it under the header.
+  void _showDraft(String text, Object? target, {bool notice = true}) {
     if (_needsNetworkChoice) problem = null;
     _needsNetworkChoice = false;
     _draftTarget = null;
@@ -939,18 +1173,24 @@ class _MergedChatPageState extends State<_MergedChatView>
           _draftTarget = restored;
         } else {
           _needsNetworkChoice = true;
-          problem =
-              'This draft belongs to a source outside this person. Choose a network before sending.';
+          if (notice) {
+            problem =
+                'This draft belongs to a source outside this person. Choose a network before sending.';
+          }
         }
       } catch (_) {
         _needsNetworkChoice = true;
-        problem =
-            'The draft source could not be read. Choose a network before sending.';
+        if (notice) {
+          problem =
+              'The draft source could not be read. Choose a network before sending.';
+        }
       }
     } else {
       _needsNetworkChoice = true;
-      problem =
-          'This draft has no saved source. Choose a network before sending.';
+      if (notice) {
+        problem =
+            'This draft has no saved source. Choose a network before sending.';
+      }
     }
   }
 
@@ -999,7 +1239,10 @@ class _MergedChatPageState extends State<_MergedChatView>
   void _timelineChanged() {
     // A membership change of a source arrives through its timeline.
     _routingCache = null;
-    if (!mounted || _timelineChangeScheduled) return;
+    if (!mounted) return;
+    // Before the coalescing: while paused no frame runs.
+    if (_awaySince != null) _maybeBoundTimelines();
+    if (_timelineChangeScheduled) return;
     _timelineChangeScheduled = true;
     SchedulerBinding.instance.scheduleFrameCallback((_) {
       _timelineChangeScheduled = false;

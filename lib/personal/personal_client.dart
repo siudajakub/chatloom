@@ -33,22 +33,55 @@ class PersonalClient extends ChangeNotifier {
       _instances[client] = personal;
   final Client client;
   final _changes = StreamController<int>.broadcast();
+  final _changeDetails = StreamController<PersonalChange>.broadcast();
   int _changeVersion = 0;
   Stream<int> get changes => _changes.stream;
+
+  /// Every notification with what it covers (see [PersonalChange]), in
+  /// order. Listeners that can update in place (the inbox: one row for a
+  /// draft keystroke) use it instead of [changes].
+  Stream<PersonalChange> get changeDetails => _changeDetails.stream;
+
+  /// What the notification being delivered covers; read it inside a
+  /// [addListener] callback.
+  PersonalChange get lastChange => _lastChange;
+  PersonalChange _lastChange = const PersonalChange._(0, true, null);
+
   @override
-  void notifyListeners() {
+  void notifyListeners() => _notify(precise: false);
+
+  /// [precise]: the caller changed nothing but replica entities (recorded
+  /// by [_entityChanged]) and the observable state; any other caller may
+  /// have changed state the listeners read, so its notification covers
+  /// everything.
+  void _notify({required bool precise}) {
     if (!_disposed && !_changes.isClosed) {
       final state = _observableState();
       final content = _contentState();
+      final other = _otherContentState();
       // A notification that changed nothing observable comes from a direct
       // call (groups being unmerged, transcription state): treat it as
       // content. Only a pure status change keeps [contentRevision].
-      if (content != _notifiedContent || state == _notifiedState) {
-        _contentRevision++;
+      final contentChanged =
+          content != _notifiedContent || state == _notifiedState;
+      if (contentChanged) _contentRevision++;
+      final Set<String>? entities;
+      if (!contentChanged) {
+        entities = const {};
+      } else if (precise &&
+          other == _notifiedOther &&
+          _changedEntities.isNotEmpty) {
+        entities = Set.unmodifiable(_changedEntities);
+      } else {
+        entities = null;
       }
+      _changedEntities.clear();
       _notifiedContent = content;
       _notifiedState = state;
-      _changes.add(++_changeVersion);
+      _notifiedOther = other;
+      _lastChange = PersonalChange._(++_changeVersion, contentChanged, entities);
+      _changes.add(_changeVersion);
+      _changeDetails.add(_lastChange);
       super.notifyListeners();
     }
   }
@@ -68,6 +101,16 @@ class PersonalClient extends ChangeNotifier {
     journal?.id,
   );
 
+  // [_contentState] without the replica: when only the replica moved, the
+  // committed entities say exactly what changed.
+  Object? _notifiedOther;
+  Object _otherContentState() =>
+      (_alertRevision, ready, problem, syncFailure, journal?.id);
+
+  // Replica entities committed since the last notification.
+  final _changedEntities = <String>{};
+  void _entityChanged(String entity) => _changedEntities.add(entity);
+
   // Everything listeners render. Inbox, chats and settings rebuild on every
   // notification, so journal activity which changes none of it stays silent.
   Object? _notifiedState;
@@ -86,13 +129,15 @@ class PersonalClient extends ChangeNotifier {
   );
 
   void _notifyIfChanged() {
-    if (!_disposed && _observableState() != _notifiedState) notifyListeners();
+    if (!_disposed && _observableState() != _notifiedState) {
+      _notify(precise: true);
+    }
   }
 
   void _replicaChanged() {
     _replicaRevision++;
     // Results applied by one replay pass produce one notification at its end.
-    if (!_replaying) notifyListeners();
+    if (!_replaying) _notify(precise: true);
   }
 
   PersonalClient._(this.client) : _openStore = PersonalStore.open {
@@ -482,6 +527,7 @@ class PersonalClient extends ChangeNotifier {
       newOperationId: () => const Uuid().v4(),
       clock: DateTime.now,
       onChanged: _replicaChanged,
+      onEntityChanged: _entityChanged,
     );
     // Seen markers and immediate media/text outboxes can grow independently
     // from private metadata. They are read by their owners on demand, rather
@@ -1191,17 +1237,21 @@ class PersonalClient extends ChangeNotifier {
       if (_indexOf(timeline, anchor.eventId) < 0) anchor = _watermark = null;
     }
     // Newest first; events arriving while this pass awaits wait for the next.
-    final events = List<Event>.of(timeline.events);
+    // Read synchronously up to the first await below; only a rescan or a
+    // pass without anchor copies every loaded event, a resumed pass copies
+    // just the events after its anchor.
+    final live = timeline.events;
     final anchorIndex = anchor == null
         ? -1
-        : events.indexWhere((event) => event.eventId == anchor!.eventId);
+        : live.indexWhere((event) => event.eventId == anchor!.eventId);
     if (anchorIndex < 0) anchor = null;
-    final newer = anchor == null ? events : events.sublist(0, anchorIndex);
+    final events = rescan || anchor == null ? List<Event>.of(live) : null;
+    final newer = anchor == null ? events! : live.sublist(0, anchorIndex);
     final heldIds = anchor?.held ?? const <String>[];
     final held = <String, Event>{};
     if (heldIds.isNotEmpty) {
       final wanted = heldIds.toSet();
-      for (final event in events) {
+      for (final event in live) {
         if (wanted.contains(event.eventId)) held[event.eventId] = event;
       }
       for (final id in heldIds) {
@@ -1209,7 +1259,7 @@ class PersonalClient extends ChangeNotifier {
         if (fetched != null) held.putIfAbsent(id, () => fetched);
       }
     }
-    final replayed = rescan ? events : newer;
+    final replayed = events ?? newer;
     await trust.capture(room, [
       ...replayed,
       ...held.values,
@@ -1278,7 +1328,7 @@ class PersonalClient extends ChangeNotifier {
     // Without an anchor the loaded timeline must reach the journal's start;
     // otherwise keep full replays (and no watermark) as before.
     if (anchor == null &&
-        (events.isEmpty || events.last.type != EventTypes.RoomCreate)) {
+        (events!.isEmpty || events.last.type != EventTypes.RoomCreate)) {
       return;
     }
     if (_trustFingerprint() != trust.fingerprint) {
@@ -1332,6 +1382,52 @@ class PersonalClient extends ChangeNotifier {
     _watermark = next;
     _heldEvents.removeWhere((id, _) => !next.held.contains(id));
     _unavailableHeld.removeAll(resolved);
+    _boundJournal(timeline, next);
+  }
+
+  /// Keeps a long-running journal timeline as small as a restart would load
+  /// it. Attach bounds it once; afterwards every new event (a heartbeat each
+  /// five minutes, every command and result) stays in the SDK timeline for
+  /// the life of the process. Once it holds twice [_retainedJournalEvents],
+  /// the events older than the watermark's resume margin are dropped, but
+  /// never the newest [_retainedJournalEvents]: everything there is settled
+  /// or held (the watermark invariant), and held ones stay reachable in
+  /// [_heldEvents] exactly as after a bounded attach.
+  ///
+  /// Synchronous, right after the watermark moved: no replay runs meanwhile.
+  /// Pagination state is unaffected: history is requested again only when
+  /// a limited sync dropped the anchor, which restarts it from the store.
+  void _boundJournal(Timeline timeline, JournalWatermark anchor) {
+    final events = timeline.events;
+    if (events.length <= 2 * _retainedJournalEvents ||
+        !identical(timeline, _timeline) ||
+        _attaching != null ||
+        _disposed) {
+      return;
+    }
+    final anchorIndex = _indexOf(timeline, anchor.eventId);
+    if (anchorIndex < 0) return;
+    final margin = anchor.originServerTs.subtract(_resumeMargin);
+    // Like [_pageBack]: the margin ends with the first event before it.
+    var keep = anchorIndex + 1;
+    while (keep < events.length &&
+        !events[keep - 1].originServerTs.isBefore(margin)) {
+      keep++;
+    }
+    if (keep < _retainedJournalEvents) keep = _retainedJournalEvents;
+    if (keep >= events.length) return;
+    final held = anchor.held.toSet();
+    for (var i = keep; i < events.length; i++) {
+      final event = events[i];
+      if (held.contains(event.eventId)) {
+        _heldEvents.putIfAbsent(event.eventId, () => event);
+      } else {
+        // Gone from every future batch; replaying it again after a gap
+        // fill is idempotent.
+        _acceptedResultEvents.remove(event.eventId);
+      }
+    }
+    events.removeRange(keep, events.length);
   }
 
   void _indexDueReminder(Event event, PersonalOperation op) {
@@ -1487,7 +1583,17 @@ class PersonalClient extends ChangeNotifier {
 
   Object? _policyValue;
   TranscriptionPolicy _policy = TranscriptionPolicy.defaults;
+
+  /// Transcript ids this run asked for automatically, oldest first. A
+  /// requested id is normally guarded by its job in [transcripts] too; the
+  /// record only keeps a failed request from repeating, so its oldest ids
+  /// beyond [_autoRequestedLimit] are dropped (as after a restart).
   final _autoRequested = <String>{};
+  static const _autoRequestedLimit = 512;
+
+  /// Size of the automatic request record; tests only.
+  @visibleForTesting
+  int get debugAutoRequestedCount => _autoRequested.length;
   final _autoTimers = <String, Timer>{};
   Timer? _autoPendingExpiry;
   DateTime? _autoPendingExpiresAt;
@@ -1828,6 +1934,9 @@ class PersonalClient extends ChangeNotifier {
     if (autoTranscriptionBlockFor(e, DateTime.now()) != null ||
         !_autoRequested.add(id)) {
       return;
+    }
+    while (_autoRequested.length > _autoRequestedLimit) {
+      _autoRequested.remove(_autoRequested.first);
     }
     try {
       await _requestTranscript(
@@ -2434,6 +2543,43 @@ class PersonalClient extends ChangeNotifier {
     _store?.close();
     _store = null;
     _changes.close();
+    _changeDetails.close();
     super.dispose();
   }
+}
+
+/// What one [PersonalClient] notification covers.
+@immutable
+class PersonalChange {
+  const PersonalChange._(this.version, this.content, this.entities);
+
+  /// Increments with every notification.
+  final int version;
+
+  /// False for a pure status update (worker heartbeat, diagnostics):
+  /// nothing an inbox row or chat shows changed.
+  final bool content;
+
+  /// The private-store entities (`draft:<room>`, `org:<entity>`, …) whose
+  /// state changed, or null when the change may cover anything (a direct
+  /// notification, readiness, failures, alerts). Empty when [content] is
+  /// false.
+  final Set<String>? entities;
+
+  /// True when only drafts changed: `draft:<room id>` or
+  /// `draft:person:<group id>` entities.
+  bool get draftsOnly {
+    final changed = entities;
+    return content &&
+        changed != null &&
+        changed.isNotEmpty &&
+        changed.every((entity) => entity.startsWith(draftPrefix));
+  }
+
+  static const draftPrefix = 'draft:';
+
+  @override
+  String toString() =>
+      'PersonalChange($version, content: $content, '
+      'entities: ${entities?.length})';
 }

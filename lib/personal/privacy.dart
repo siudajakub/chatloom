@@ -96,7 +96,10 @@ abstract final class PersonalPrivacy {
     _readChanges.add(room);
   }
 
-  static final _readCutoffs = Map<Room, String>.identity();
+  // Per Room object, weakly: a room this account left or deleted is dropped
+  // from the client (a rejoin makes a new Room), and must not stay in memory
+  // with its whole state for the rest of the session.
+  static final _readCutoffs = Expando<String>('read cutoffs');
   static final _readChanges = StreamController<Room>.broadcast();
   static Stream<Room> get readChanges => _readChanges.stream;
 
@@ -114,7 +117,7 @@ abstract final class PersonalPrivacy {
     return room.hasNewMessages;
   }
 
-  static final _observed = Map<Room, String>.identity();
+  static final _observed = Expando<String>('observed read positions');
   static String? frozenReadCutoff(Room room) => _observed[room];
 
   /// [committedRound]: [action] sends the final event of a round video the
@@ -152,7 +155,7 @@ abstract final class PersonalPrivacy {
   static void forgetObservedControl(Event event) {
     if (isTelegramMediaControl(event.type) &&
         _observed[event.room] == event.eventId) {
-      _observed.remove(event.room);
+      _observed[event.room] = null;
     }
   }
 
@@ -161,8 +164,10 @@ abstract final class PersonalPrivacy {
     unawaited(TelegramRoundService.closeFor(client));
     TelegramRoomBinding.forget(client);
     MessengerRoundGate.forget(client);
-    _observed.removeWhere((room, _) => identical(room.client, client));
-    _readCutoffs.removeWhere((room, _) => identical(room.client, client));
+    for (final room in client.rooms) {
+      _observed[room] = null;
+      _readCutoffs[room] = null;
+    }
     _typingRooms.removeWhere((room) => identical(room.client, client));
   }
 

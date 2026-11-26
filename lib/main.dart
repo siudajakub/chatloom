@@ -12,6 +12,7 @@ import 'package:chatloom/config/app_config.dart';
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/open_file.dart';
 import 'package:chatloom/personal/media/stale_recordings.dart';
+import 'package:chatloom/personal/memory_trim.dart';
 import 'package:chatloom/personal/performance_probe.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/push_diagnostics.dart';
@@ -20,6 +21,7 @@ import 'package:chatloom/utils/client_manager.dart';
 import 'package:chatloom/utils/error_reporter.dart';
 import 'package:chatloom/utils/file_selector.dart';
 import 'package:chatloom/utils/flutter_error_routing.dart';
+import 'package:chatloom/utils/mobile_sync_lifecycle.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
 import 'package:chatloom/utils/platform_infos.dart';
@@ -76,6 +78,14 @@ void main(List<String> args) => runZonedGuarded(() async {
   // To make sure that the parts of flutter needed are started up already, we need to ensure that the
   // widget bindings are initialized already.
   WidgetsFlutterBinding.ensureInitialized();
+  // Decoded images: thumbnails and avatars are decoded at display size, so
+  // 64 MB / 400 images hold several screens; Flutter's 100 MB / 1000 default
+  // let a long-running desktop session keep far more than it shows.
+  PaintingBinding.instance.imageCache
+    ..maximumSizeBytes = 64 << 20
+    ..maximumSize = 400;
+  // Drops rebuildable media caches while the app is away (memory).
+  MemoryTrim.install();
   PersonalPerformanceProbe.install();
   // Gallery picks (attachments, avatars) use the system photo picker.
   useSystemPhotoPicker();
@@ -364,7 +374,11 @@ class AppStarter with WidgetsBindingObserver {
     // Switching to foreground mode re-enables sync; own presence stays
     // offline (`PrivacyPolicy.allowOnlinePresence`).
     for (final client in clients) {
-      client.backgroundSync = true;
+      // Off screen (hidden/paused): keep the loop off until shown; the
+      // lifecycle policy starts it with a catch-up.
+      if (!MobileSyncLifecycle.holdWhileAway(client, state)) {
+        client.backgroundSync = true;
+      }
       client.syncPresence = PresenceType.offline;
     }
     // Claim startup before its first await and release the one-shot observer.

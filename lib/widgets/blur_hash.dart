@@ -33,6 +33,9 @@ class BlurHash extends StatefulWidget {
   @visibleForTesting
   static void clearCache() => _BlurHashState._cache.clear();
 
+  /// Drops the decoded placeholders (memory trim); mounted ones keep theirs.
+  static void trimMemory() => _BlurHashState._cache.clear();
+
   /// Replaces the isolate decode in tests; production decodes off the UI
   /// thread with `compute`.
   @visibleForTesting

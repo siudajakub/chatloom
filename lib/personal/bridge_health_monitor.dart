@@ -253,6 +253,10 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
   @visibleForTesting
   bool get debugPollScheduled => _poll != null;
 
+  /// Whether a verdict re-evaluation is scheduled (tests).
+  @visibleForTesting
+  bool get debugBoundaryScheduled => _boundary != null;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _lifecycle = state;
@@ -270,6 +274,9 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
     } else {
       _poll?.cancel();
       _poll = null;
+      // Verdicts age unseen; coming back evaluates them at once.
+      _boundary?.cancel();
+      _boundary = null;
     }
   }
 
@@ -606,11 +613,14 @@ class BridgeHealthMonitor extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// One timer for the next moment a verdict changes by itself (a passing
-  /// state reaches 3 minutes, an answer gets old), only while listened to.
+  /// state reaches 3 minutes, an answer gets old), only while listened to
+  /// and in the foreground: an app in the background (the inbox stays
+  /// mounted and listening) shows no verdict, and [_onForegroundChanged]
+  /// evaluates again on return.
   void _scheduleBoundary(DateTime now) {
     _boundary?.cancel();
     _boundary = null;
-    if (!hasListeners) return;
+    if (!hasListeners || !_foreground) return;
     DateTime? next;
     for (final signals in _signals.values) {
       final at = nextBridgeHealthChange(signals, now);

@@ -358,6 +358,10 @@ abstract final class StickerConvertedMedia {
     _still.clear();
   }
 
+  /// Drops converted bytes (memory trim). Uploaded references stay: they
+  /// would cost another upload.
+  static void trimMemory() => _converted.clear();
+
   /// The sticker content for [plan]'s conversion of [item] in [room]
   /// (`body`, `url`/`file`, `info`), or null when the conversion is not
   /// worth it ([StickerConversion.onlyIfAnimated] with a still source).

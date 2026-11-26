@@ -184,20 +184,37 @@ class _ScrollAwareLoad extends StatefulWidget {
 }
 
 class _ScrollAwareLoadState extends State<_ScrollAwareLoad> {
+  /// Longest run of per-frame re-checks before the child loads anyway.
+  /// A fling whose ticker was muted (`TickerMode` off: unfocused window,
+  /// hidden tab) keeps its last velocity forever, and polling it would draw
+  /// frames forever (battery, macOS idle CPU).
+  static const _maxChecks = 120;
+
   bool? _ready;
+  bool _tickers = true;
+  bool _pending = false;
+  int _checks = 0;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_ready != null) return;
-    _ready = !Scrollable.recommendDeferredLoadingForContext(context);
+    // Also the dependency that resumes polling when tickers come back.
+    _tickers = TickerMode.valuesOf(context).enabled;
+    if (_ready == true) return;
+    _ready ??= !Scrollable.recommendDeferredLoadingForContext(context);
     if (!_ready!) _recheck();
   }
 
   void _recheck() {
+    if (_pending || !_tickers) return;
+    _pending = true;
     SchedulerBinding.instance.scheduleFrameCallback((_) {
-      if (!mounted) return;
-      if (Scrollable.recommendDeferredLoadingForContext(context)) {
+      _pending = false;
+      if (!mounted || _ready!) return;
+      // Tickers off: wait without frames; didChangeDependencies resumes.
+      if (!_tickers) return;
+      if (++_checks < _maxChecks &&
+          Scrollable.recommendDeferredLoadingForContext(context)) {
         _recheck();
       } else {
         setState(() => _ready = true);

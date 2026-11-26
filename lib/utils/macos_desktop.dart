@@ -1,16 +1,63 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import 'dart:async';
+
 import 'package:chatloom/personal/privacy.dart';
+import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
 import 'package:chatloom/ui/notion/notion_tokens.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
-/// The native window's visibility (macOS: not occluded and not minimised),
-/// reported by `MainFlutterWindow.swift` over the desktop channel. Drives
-/// `NotionActivity` together with the app lifecycle.
+/// The native window's visibility (macOS: ordered in, not occluded and not
+/// minimised), reported by `MainFlutterWindow.swift` over the desktop
+/// channel on every change and queried once at startup. Drives
+/// `NotionActivity`, `DesktopSyncPause` and the hidden-window playback stop
+/// together with the app lifecycle.
 abstract final class MacDesktopWindow {
+  /// True until the native side answers: off the Mac and in tests nothing
+  /// reports it.
   static final visible = ValueNotifier<bool>(true);
+
+  /// The desktop channel (menu commands, wake, visibility).
+  static const desktopChannel = MethodChannel('pl.personal.chat/desktop');
+
+  /// Applies a `visibility` value from the native side (a change or the
+  /// startup answer); anything but a bool is ignored.
+  @visibleForTesting
+  static void applyVisibility(Object? value) {
+    if (value is bool) visible.value = value;
+  }
+
+  /// Asks the native window whether it is on screen. AppKit reports
+  /// occlusion only on change and the engine reports the lifecycle only on
+  /// change: a window launched behind others (`open -g`, another Space)
+  /// would otherwise count as visible until something changed, keeping
+  /// animation, loops and sync going for nobody.
+  static Future<void> queryVisibility() => desktopChannel
+      .invokeMethod<bool>('visibility')
+      .then(applyVisibility, onError: (Object _) {});
+
+  /// Whether the app is active with this window as its key or main window
+  /// (the user is working in it), reported by `MainFlutterWindow.swift` on
+  /// every change and queried once at startup. `NotionActivity` consults it
+  /// only while the engine has not reported a lifecycle state yet: a window
+  /// launched unfocused (login item, `open -g`) is visible but not in front.
+  /// True until the native side answers.
+  static final active = ValueNotifier<bool>(true);
+
+  /// Applies an `active` value from the native side; anything but a bool is
+  /// ignored.
+  @visibleForTesting
+  static void applyActive(Object? value) {
+    if (value is bool) active.value = value;
+  }
+
+  /// Asks the native side whether the window is active (see [active]). An
+  /// older native build without the method leaves [active] true.
+  static Future<void> queryActive() => desktopChannel
+      .invokeMethod<bool>('active')
+      .then(applyActive, onError: (Object _) {});
 
   /// Height of the transparent title bar over the app (the traffic lights),
   /// from `WindowChrome.swift`; 0 in full screen and off the Mac.
@@ -579,8 +626,12 @@ class MacDesktopIntegration extends StatefulWidget {
 }
 
 class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
-  static const _channel = MethodChannel('pl.personal.chat/desktop');
+  static const _channel = MacDesktopWindow.desktopChannel;
   static Object? _owner;
+
+  /// Stops video while the window is out of sight without a `hidden`
+  /// lifecycle (see [RoundPlaybackCoordinator.stopWhileWindowHidden]).
+  VoidCallback? _hiddenPlayback;
 
   /// The appearance last given to the window (`dark`), null before.
   bool? _dark;
@@ -608,10 +659,17 @@ class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
         case 'wake':
           widget.onWake();
         case 'visibility':
-          final visible = call.arguments;
-          if (visible is bool) MacDesktopWindow.visible.value = visible;
+          MacDesktopWindow.applyVisibility(call.arguments);
+        case 'active':
+          MacDesktopWindow.applyActive(call.arguments);
       }
     });
+    // A change sent before this handler existed is lost; ask once.
+    unawaited(MacDesktopWindow.queryVisibility());
+    unawaited(MacDesktopWindow.queryActive());
+    _hiddenPlayback = RoundPlaybackCoordinator.shared.stopWhileWindowHidden(
+      MacDesktopWindow.visible,
+    );
     MacDesktopWindow.channel.setMethodCallHandler((call) async {
       if (call.method == 'titlebarInset') {
         MacDesktopWindow.applyInset(call.arguments);
@@ -651,6 +709,7 @@ class _MacDesktopIntegrationState extends State<MacDesktopIntegration> {
 
   @override
   void dispose() {
+    _hiddenPlayback?.call();
     if (identical(_owner, this)) {
       _owner = null;
       _channel.setMethodCallHandler(null);

@@ -238,11 +238,15 @@ class ConversationReactionCoordinator extends ChangeNotifier {
 /// SDK adapter shared by ordinary/merged, menu, chips and touch gestures.
 abstract final class ConversationMessageActions {
   static final _coordinators = Expando<ConversationReactionCoordinator>();
+
+  /// What a removal must see disappear. The timeline is held weakly: an
+  /// entry whose echo never came (chat closed or reloaded first) must not
+  /// keep that chat's whole timeline alive for the life of the account.
   static final _removalEvidence =
       Expando<
         Map<
           ConversationReactionKey,
-          ({Timeline timeline, List<Event> originals})
+          ({WeakReference<Timeline> timeline, List<Event> originals})
         >
       >();
   static ConversationReactionCoordinator coordinator(Event event) =>
@@ -346,7 +350,7 @@ abstract final class ConversationMessageActions {
                 ));
         final acceptedAbsence =
             manager.state(tracked) == ConversationReactionState.awaitingEcho &&
-            identical(evidence?.timeline, timeline) &&
+            identical(evidence?.timeline.target, timeline) &&
             own.isEmpty;
         manager.reconcileRemoval(
           tracked,
@@ -816,7 +820,7 @@ abstract final class ConversationMessageActions {
         : _replacedBy(event, timeline, emoji);
     if (removing) {
       (_removalEvidence[manager] ??= {})[removingKey] = (
-        timeline: timeline,
+        timeline: WeakReference(timeline),
         originals: ownReactions(event, timeline, emoji),
       );
     }

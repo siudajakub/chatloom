@@ -17,11 +17,13 @@ import 'package:chatloom/utils/crypto_worker.dart';
 import 'package:chatloom/utils/custom_http_client.dart';
 import 'package:chatloom/utils/custom_image_resizer.dart';
 import 'package:chatloom/utils/init_with_restore.dart';
+import 'package:chatloom/utils/mobile_sync_lifecycle.dart';
 import 'package:chatloom/utils/notification_background_handler.dart';
 import 'package:chatloom/utils/platform_infos.dart';
 import 'package:chatloom/utils/sync_network_recovery.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
 import 'package:matrix/encryption/utils/key_verification.dart';
@@ -386,6 +388,14 @@ class ClientStartup extends ChangeNotifier {
           PersonalPerformanceProbe.startupPhase('client_available');
           entry.available = true;
           entry.failure = null;
+          // Restored while the app is off screen: init started the loop and
+          // no GUI exists to stop it (battery, 2026-11-26).
+          if (PlatformInfos.isMobile && backgroundSync) {
+            MobileSyncLifecycle.holdWhileAway(
+              client,
+              WidgetsBinding.instance.lifecycleState,
+            );
+          }
           if ((!initialize || client.isLogged() || accounts.length == 1) &&
               !clients.contains(client)) {
             clients.add(client);

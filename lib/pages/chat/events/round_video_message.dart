@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import 'dart:async';
 
+import 'package:chatloom/personal/memory_trim.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/round_video/round_media_loader.dart';
 import 'package:chatloom/personal/round_video/round_playback_coordinator.dart';
@@ -94,10 +95,16 @@ class RoundVideoMessage extends StatefulWidget {
 
   /// Decoded-on-demand thumbnail bytes keyed by account, source and mxc, so
   /// scrolling back to a round never refetches/decrypts its thumbnail.
-  static final _thumbnailCache = BoundedByteCache<String>(
-    maxBytes: 16 * 1024 * 1024,
-    maxEntries: 256,
-  );
+  /// Registered with [MemoryTrim] on first use: a trim (background or
+  /// memory pressure) drops the decoded bytes; a row refetches on demand.
+  static final _thumbnailCache = () {
+    final cache = BoundedByteCache<String>(
+      maxBytes: 16 * 1024 * 1024,
+      maxEntries: 256,
+    );
+    MemoryTrim.addCache(() => cache.removeWhere((_) => true));
+    return cache;
+  }();
 
   static String? _thumbnailKey(Event event) {
     final mxc = event.thumbnailMxcUrl ?? event.attachmentMxcUrl;
@@ -532,11 +539,15 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         !widget.isVisible ||
         _player == null ||
         _media == null ||
-        !RoundMediaLoader.policyFor(widget.event).canPersist) {
+        !RoundMediaLoader.policyFor(widget.event).canPersist ||
+        // Reduced motion, lite mode, or the app is not in front of the
+        // user (NotionActivity): a muted preview must not start in the
+        // background, where it keeps the native video display link running.
+        NotionMotion.reduced(context)) {
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || MediaQuery.disableAnimationsOf(context)) return;
+      if (!mounted || NotionMotion.reduced(context)) return;
       if (_available &&
           widget.allowMutedAutoplay &&
           _viewportVisible &&
@@ -596,7 +607,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
           bounds.height > 0 &&
           !overlap.isEmpty &&
           overlap.width * overlap.height / (bounds.width * bounds.height) >= .6;
-      if (MediaQuery.disableAnimationsOf(context) &&
+      if (NotionMotion.reduced(context) &&
           _previewOwner == this &&
           !_handle.isCurrent) {
         unawaited(_stop());
@@ -759,6 +770,11 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         return RoundStartResult.aborted;
       }
       var player = _player;
+      // Whether this call initialized [player]: an abort below must release
+      // it. An initialized player that never draws keeps the platform video
+      // pipeline alive (on macOS a display link firing every vsync) until
+      // the row stops.
+      var fresh = false;
       if (player == null) {
         setState(() {
           _loading = true;
@@ -790,6 +806,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         _media = media;
         player = _newPlayer(media, muted: !audible);
         _player = player;
+        fresh = true;
         _withPlayer.add(this);
         player.addListener(_onPlayerChanged);
         await player.initialize().timeout(_initializeTimeout);
@@ -826,6 +843,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
         }
         final audibleMedia = _newPlayer(media, muted: false);
         player = _player = audibleMedia;
+        fresh = true;
         audibleMedia.addListener(_onPlayerChanged);
         await audibleMedia.initialize().timeout(_initializeTimeout);
         if (!identical(audibleMedia, _player)) return RoundStartResult.aborted;
@@ -840,6 +858,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
           generation != _generation ||
           (!audible && !_viewportVisible) ||
           (audible && !_handle.isCurrent)) {
+        if (fresh) await _discardUnstarted(player, generation);
         return RoundStartResult.aborted;
       }
       if (player.value.position >= player.value.duration) {
@@ -849,6 +868,7 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       if (!_available ||
           generation != _generation ||
           (audible && !_handle.isCurrent)) {
+        if (fresh) await _discardUnstarted(player, generation);
         return RoundStartResult.aborted;
       }
       _userStarted = userInitiated;
@@ -892,6 +912,21 @@ class _RoundVideoMessageState extends State<RoundVideoMessage>
       }
       _settled();
     }
+  }
+
+  /// Releases a player [_start] initialized but then abandoned before
+  /// playing (superseded, scrolled away, source gone). A stop in between
+  /// (new generation) or a replacement already released it.
+  Future<void> _discardUnstarted(
+    VideoPlayerController player,
+    int generation,
+  ) async {
+    if (generation != _generation ||
+        !identical(player, _player) ||
+        player.value.isPlaying) {
+      return;
+    }
+    await _disposePlayer();
   }
 
   void _settled() {

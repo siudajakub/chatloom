@@ -320,10 +320,7 @@ class MediaPrefetcher with WidgetsBindingObserver {
     if (observeEnvironment && !_observing) {
       _observing = true;
       WidgetsBinding.instance.addObserver(this);
-      _connectivity = Connectivity().onConnectivityChanged.listen(
-        (_) => _environmentChanged(),
-        onError: (Object _) => _environmentChanged(),
-      );
+      if (_onScreen(WidgetsBinding.instance.lifecycleState)) _listenNetwork();
     }
     _arrivals ??= client.onTimelineEvent.stream.listen(_arrived);
     scope._schedule();
@@ -366,9 +363,31 @@ class MediaPrefetcher with WidgetsBindingObserver {
     _connectivity = null;
   }
 
+  static bool _onScreen(AppLifecycleState? state) =>
+      state != AppLifecycleState.hidden && state != AppLifecycleState.paused;
+
+  /// Network changes matter only while the app is shown: in the background
+  /// the subscription kept Android's network callback registered and woke
+  /// the app on every capability change (battery, 2026-11-26).
+  void _listenNetwork() {
+    _connectivity ??= Connectivity().onConnectivityChanged.listen(
+      (_) => _environmentChanged(),
+      onError: (Object _) => _environmentChanged(),
+    );
+  }
+
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) =>
-      _environmentChanged();
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_observing) {
+      if (_onScreen(state)) {
+        _listenNetwork();
+      } else {
+        unawaited(_connectivity?.cancel());
+        _connectivity = null;
+      }
+    }
+    _environmentChanged();
+  }
 
   void _environmentChanged() {
     if (_closed) return;

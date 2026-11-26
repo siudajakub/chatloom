@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
 
+import 'memory_trim.dart';
 import 'personal_client.dart';
 
 /// Size limit of a private avatar, plaintext and encrypted.
@@ -44,9 +44,64 @@ Future<Uint8List?> downloadPrivateAvatar(
 }
 
 /// Decrypted avatars by ciphertext hash, so list rows do not download and
-/// decrypt again on every rebuild or scroll. Memory only.
+/// decrypt again on every rebuild or scroll. Memory only, least recently
+/// used first out, bounded by [_decryptedLimit] entries and
+/// [privateAvatarCacheBytes] (one avatar may be up to 2 MB, so 64 entries
+/// alone allowed 128 MB). [MemoryTrim] empties it only under memory
+/// pressure (refilling costs a download and decryption); a shown avatar
+/// keeps its own bytes and image.
 final _decrypted = <String, Uint8List>{};
 const _decryptedLimit = 64;
+int _decryptedBytes = 0;
+bool _trimRegistered = false;
+
+/// Byte budget of the decrypted private avatar cache.
+const privateAvatarCacheBytes = 8 * 1024 * 1024;
+
+void _remember(String hash, Uint8List bytes) {
+  if (!_trimRegistered) {
+    _trimRegistered = true;
+    MemoryTrim.addPressureCache(clearPrivateAvatarCache);
+  }
+  final previous = _decrypted.remove(hash);
+  if (previous != null) _decryptedBytes -= previous.lengthInBytes;
+  // Larger than the whole budget: shown once, never kept.
+  if (bytes.lengthInBytes > privateAvatarCacheBytes) return;
+  while (_decrypted.isNotEmpty &&
+      (_decrypted.length >= _decryptedLimit ||
+          _decryptedBytes + bytes.lengthInBytes > privateAvatarCacheBytes)) {
+    final oldest = _decrypted.keys.first;
+    _decryptedBytes -= _decrypted.remove(oldest)!.lengthInBytes;
+  }
+  _decrypted[hash] = bytes;
+  _decryptedBytes += bytes.lengthInBytes;
+}
+
+Uint8List? _recall(String hash) {
+  final bytes = _decrypted.remove(hash);
+  if (bytes != null) _decrypted[hash] = bytes;
+  return bytes;
+}
+
+/// Empties the decrypted private avatar cache (memory trim, tests).
+void clearPrivateAvatarCache() {
+  _decrypted.clear();
+  _decryptedBytes = 0;
+}
+
+@visibleForTesting
+({int entries, int bytes}) get debugPrivateAvatarCache =>
+    (entries: _decrypted.length, bytes: _decryptedBytes);
+
+@visibleForTesting
+void debugRememberPrivateAvatar(String hash, Uint8List bytes) =>
+    _remember(hash, bytes);
+
+@visibleForTesting
+void debugResetPrivateAvatarCache() {
+  clearPrivateAvatarCache();
+  _trimRegistered = false;
+}
 
 /// Decrypts one stored private avatar record (see `uploadPrivateAvatar`).
 Future<Uint8List?> downloadPrivateAvatarValue(
@@ -54,22 +109,17 @@ Future<Uint8List?> downloadPrivateAvatarValue(
   Map<String, dynamic> value,
 ) async {
   final hash = value['sha256'];
-  final cached = hash is String ? _decrypted[hash] : null;
+  final cached = hash is String ? _recall(hash) : null;
   if (cached != null) return cached;
   final bytes = await _download(client, value);
-  if (bytes != null && hash is String) {
-    if (_decrypted.length >= _decryptedLimit) {
-      _decrypted.remove(_decrypted.keys.first);
-    }
-    _decrypted[hash] = bytes;
-  }
+  if (bytes != null && hash is String) _remember(hash, bytes);
   return bytes;
 }
 
 /// Plaintext of [value] when already in memory, to render without a flash.
 Uint8List? cachedPrivateAvatar(Map<String, dynamic>? value) {
   final hash = value?['sha256'];
-  return hash is String ? _decrypted[hash] : null;
+  return hash is String ? _recall(hash) : null;
 }
 
 Future<Uint8List?> _legacy(

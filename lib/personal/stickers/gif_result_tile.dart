@@ -84,6 +84,9 @@ class _GifResultTileState extends State<GifResultTile>
   bool _tickers = true;
   bool _routeCurrent = true;
   bool _reduced = false;
+
+  /// Releases a player that stayed paused for [InlineLoopSlots.idleRelease].
+  Timer? _idleRelease;
   bool _disposed = false;
 
   bool get _autoplayAllowed =>
@@ -173,6 +176,7 @@ class _GifResultTileState extends State<GifResultTile>
       unawaited(_release());
     } else {
       unawaited(_pause());
+      _scheduleIdleRelease();
     }
   }
 
@@ -213,6 +217,8 @@ class _GifResultTileState extends State<GifResultTile>
     if (!mounted) return;
     final player = _player;
     if (_shouldPlay) {
+      _idleRelease?.cancel();
+      _idleRelease = null;
       if (player == null) {
         unawaited(_start());
       } else if (player.value.isInitialized && !player.value.isPlaying) {
@@ -224,7 +230,18 @@ class _GifResultTileState extends State<GifResultTile>
       unawaited(_release());
     } else {
       unawaited(_pause());
+      _scheduleIdleRelease();
     }
+  }
+
+  /// Paused in view (covered, inactive, a hidden window): the frame stays
+  /// for [InlineLoopSlots.idleRelease], then the native player goes.
+  void _scheduleIdleRelease() {
+    if (_player == null && !_starting) return;
+    _idleRelease ??= Timer(InlineLoopSlots.idleRelease, () {
+      _idleRelease = null;
+      if (mounted && !_disposed && !_shouldPlay) unawaited(_release());
+    });
   }
 
   Future<VideoPlayerController> _createPlayer(int generation) async {
@@ -282,7 +299,11 @@ class _GifResultTileState extends State<GifResultTile>
       await player.setVolume(0);
       await player.setLooping(true);
       if (generation != _generation || !mounted) return;
-      if (_shouldPlay) await player.play();
+      if (_shouldPlay) {
+        await player.play();
+      } else {
+        _scheduleIdleRelease();
+      }
       if (mounted && !_disposed && generation == _generation) {
         setState(() {});
       }
@@ -314,6 +335,8 @@ class _GifResultTileState extends State<GifResultTile>
   }
 
   Future<void> _release() async {
+    _idleRelease?.cancel();
+    _idleRelease = null;
     ++_generation;
     _starting = false;
     final player = _player;

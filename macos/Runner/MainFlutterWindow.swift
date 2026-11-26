@@ -5,7 +5,7 @@ class MainFlutterWindow: SyntheticPasteWindow {
   private var windowChrome: WindowChrome?
   private var desktopChannel: FlutterMethodChannel?
   private var wakeObserver: NSObjectProtocol?
-  private var occlusionObserver: NSObjectProtocol?
+  private var visibilityObservers: [NSObjectProtocol] = []
   private var roundCapture: RoundCapture?
   // battery-lifecycle (BP-08): Low Power Mode -> lite mode.
   private var powerChannel: FlutterMethodChannel?
@@ -37,6 +37,18 @@ class MainFlutterWindow: SyntheticPasteWindow {
     let channel = FlutterMethodChannel(
       name: "pl.personal.chat/desktop", binaryMessenger: flutterViewController.engine.binaryMessenger)
     desktopChannel = channel
+    // Dart asks once at startup: a change sent before its handler existed is
+    // lost, and a window launched behind others (`open -g`, another Space)
+    // may never report a change at all.
+    channel.setMethodCallHandler { [weak self] call, result in
+      if call.method == "visibility" {
+        result(self?.isOnScreen ?? false)
+      } else if call.method == "active" {
+        result(self?.isActiveWindow ?? false)
+      } else {
+        result(FlutterMethodNotImplemented)
+      }
+    }
     wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
     ) { [weak self] _ in
@@ -44,17 +56,56 @@ class MainFlutterWindow: SyntheticPasteWindow {
     }
     // Decorative animation stops while the window is not on screen
     // (covered, minimised or closed); see NotionActivity.
-    occlusionObserver = NotificationCenter.default.addObserver(
-      forName: NSWindow.didChangeOcclusionStateNotification, object: self, queue: .main
-    ) { [weak self] _ in
-      guard let self = self else { return }
-      self.desktopChannel?.invokeMethod(
-        "visibility", arguments: self.occlusionState.contains(.visible) && !self.isMiniaturized)
+    let center = NotificationCenter.default
+    visibilityObservers = [
+      NSWindow.didChangeOcclusionStateNotification,
+      NSWindow.didMiniaturizeNotification,
+      NSWindow.didDeminiaturizeNotification,
+    ].map { name in
+      center.addObserver(forName: name, object: self, queue: .main) { [weak self] _ in
+        guard let self = self else { return }
+        self.desktopChannel?.invokeMethod("visibility", arguments: self.isOnScreen)
+      }
     }
+    // Focus: NotionActivity consults it until the engine reports a lifecycle
+    // state, so a window launched unfocused does not animate for nobody.
+    let activeNames: [(Notification.Name, Any?)] = [
+      (NSWindow.didBecomeKeyNotification, self),
+      (NSWindow.didResignKeyNotification, self),
+      (NSWindow.didBecomeMainNotification, self),
+      (NSWindow.didResignMainNotification, self),
+      (NSApplication.didBecomeActiveNotification, nil),
+      (NSApplication.didResignActiveNotification, nil),
+    ]
+    for (name, object) in activeNames {
+      visibilityObservers.append(
+        center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+          guard let self = self else { return }
+          self.desktopChannel?.invokeMethod("active", arguments: self.isActiveWindow)
+        })
+    }
+    // Still ordered in while it closes (red button, ⌘W): report it gone.
+    visibilityObservers.append(
+      center.addObserver(forName: NSWindow.willCloseNotification, object: self, queue: .main) {
+        [weak self] _ in
+        self?.desktopChannel?.invokeMethod("visibility", arguments: false)
+      })
     configureMenu(NSApp.mainMenu)
     configurePowerSaving(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
+  }
+
+  /// On screen: ordered in, not minimised and not fully covered (another
+  /// Space, other windows, a hidden app). `lib/utils/macos_desktop.dart`.
+  private var isOnScreen: Bool {
+    isVisible && !isMiniaturized && occlusionState.contains(.visible)
+  }
+
+  /// The user works in this window: the app is active and the window is its
+  /// key or main window. `lib/utils/macos_desktop.dart` (`active`).
+  private var isActiveWindow: Bool {
+    NSApp.isActive && (isKeyWindow || isMainWindow)
   }
 
   private func configureMenu(_ menu: NSMenu?) {
@@ -116,7 +167,7 @@ class MainFlutterWindow: SyntheticPasteWindow {
     if let observer = wakeObserver {
       NSWorkspace.shared.notificationCenter.removeObserver(observer)
     }
-    if let observer = occlusionObserver {
+    for observer in visibilityObservers {
       NotificationCenter.default.removeObserver(observer)
     }
     if let observer = powerObserver {

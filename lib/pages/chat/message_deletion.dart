@@ -212,6 +212,10 @@ abstract final class MessageDeletions {
     required ScaffoldMessengerState? messenger,
     required VoidCallback retry,
   }) async {
+    // A sending message is watched from now on: its confirmation can arrive
+    // while the bubble animates out, and the SDK replaces the event object,
+    // so [event]'s own status would never say it landed.
+    final landing = event.status.isSending ? _Landing(event) : null;
     // With deleted messages hidden the bubble shrinks away and its
     // neighbours close the gap first (with nothing on screen or reduced
     // motion it goes at once); otherwise it turns into the placeholder.
@@ -239,8 +243,8 @@ abstract final class MessageDeletions {
       );
     }
 
-    if (event.status.isSending) {
-      _deleteWhenLanded(event, onError: failed);
+    if (landing != null) {
+      _deleteWhenLanded(event, landing, onError: failed);
       return;
     }
     if (event.status.isError) {
@@ -265,17 +269,11 @@ abstract final class MessageDeletions {
   /// A sending message: deleted the moment the server confirms it, or
   /// discarded with its outbox attempt if the send gives up.
   static void _deleteWhenLanded(
-    Event event, {
+    Event event,
+    _Landing landing, {
     required void Function(Object) onError,
   }) {
-    final room = event.room;
-    final txid = event.transactionId ?? event.eventId;
-    late final StreamSubscription<Event> sub;
-    var done = false;
-    Future<void> settle(Event landed) async {
-      if (done) return;
-      done = true;
-      unawaited(sub.cancel());
+    landing.then((landed) async {
       try {
         if (landed.status.isError) {
           await MessageDeliveryActions.discard(landed);
@@ -285,19 +283,77 @@ abstract final class MessageDeletions {
       } catch (error) {
         onError(error);
       }
-    }
-
-    sub = room.client.onTimelineEvent.stream.listen((update) {
-      if (update.room.id != room.id) return;
-      final matches = update.transactionId == txid || update.eventId == txid;
-      if (!matches) return;
-      if (update.status.isError ||
-          (update.status.isSent && update.eventId.startsWith(r'$'))) {
-        unawaited(settle(update));
-      }
     });
     // It may have landed between the menu and the confirmation.
-    if (event.status.isError) unawaited(settle(event));
+    if (event.status.isError) landing.settle(event);
+  }
+
+  /// Open landing watches; tests only.
+  @visibleForTesting
+  static int get debugLandingWatches => _Landing.open;
+}
+
+/// Waits for a sending message to land (or fail) and then runs its action
+/// once; a landing seen before the action is set is kept for it. Ends, with
+/// its listeners, when the send is cancelled: nothing is left to delete.
+class _Landing {
+  _Landing(Event event)
+    : _room = event.room,
+      _txid = event.transactionId ?? event.eventId {
+    open++;
+    _updates = _room.client.onTimelineEvent.stream.listen((update) {
+      if (update.room.id != _room.id ||
+          (update.transactionId != _txid && update.eventId != _txid)) {
+        return;
+      }
+      if (update.status.isError ||
+          (update.status.isSent && update.eventId.startsWith(r'$'))) {
+        settle(update);
+      }
+    });
+    _cancels = _room.client.onCancelSendEvent.stream.listen((id) {
+      if (id == _txid) _close();
+    });
+  }
+
+  static int open = 0;
+
+  final Room _room;
+  final String _txid;
+  late final StreamSubscription<Event> _updates;
+  late final StreamSubscription<String> _cancels;
+  bool _closed = false;
+  Event? _landed;
+  void Function(Event)? _action;
+
+  void then(void Function(Event) action) {
+    final landed = _landed;
+    if (landed != null) {
+      _landed = null;
+      action(landed);
+    } else if (!_closed) {
+      _action = action;
+    }
+  }
+
+  void settle(Event landed) {
+    if (_closed) return;
+    _close();
+    final action = _action;
+    _action = null;
+    if (action == null) {
+      _landed = landed;
+    } else {
+      action(landed);
+    }
+  }
+
+  void _close() {
+    if (_closed) return;
+    _closed = true;
+    open--;
+    unawaited(_updates.cancel());
+    unawaited(_cancels.cancel());
   }
 }
 

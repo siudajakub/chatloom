@@ -293,9 +293,21 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
   AppLifecycleListener? _readinessLifecycle;
   BackgroundPush? _push;
 
+  /// The page is in front of the user: the app is active and its window on
+  /// screen ([NotionActivity]) and the route is not covered (`TickerMode`).
+  bool _inFront = true;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final inFront =
+        NotionActivity.isActive(context) &&
+        TickerMode.valuesOf(context).enabled;
+    if (inFront != _inFront) {
+      _inFront = inFront;
+      // The rebuild that follows shows the current readiness.
+      _updateReadinessTimer(refresh: false);
+    }
     final push = BackgroundPush(Matrix.of(context));
     if (!identical(_push, push)) {
       _push?.registrationChanges.removeListener(_refreshReadiness);
@@ -336,11 +348,16 @@ class _PersonalSettingsPageState extends State<PersonalSettingsPage> {
     PersonalPageLoad.request(context, personal);
   }
 
-  void _updateReadinessTimer() {
+  /// Re-reads readiness every 30 s while the page is in front; a hidden
+  /// window, the background or a covering route stop it (no wakeups for
+  /// nobody), and coming back refreshes at once.
+  void _updateReadinessTimer({bool refresh = true}) {
     _readinessTimer?.cancel();
+    _readinessTimer = null;
     final state = WidgetsBinding.instance.lifecycleState;
     if (state != null && state != AppLifecycleState.resumed) return;
-    _refreshReadiness();
+    if (!_inFront) return;
+    if (refresh) _refreshReadiness();
     _readinessTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => _refreshReadiness(),

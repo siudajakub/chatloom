@@ -38,7 +38,8 @@ class NotionInboxViewChips extends StatefulWidget {
   final int unreadCount;
 
   /// Message requests waiting for an answer (Instagram, Messenger): the
-  /// "Requests" chip appears only while there are some (FX-02).
+  /// "Requests" chip is always shown and carries this count while it is
+  /// above zero.
   final int requestCount;
 
   @override

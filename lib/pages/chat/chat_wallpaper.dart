@@ -301,7 +301,11 @@ class BlurredWallpaper extends StatefulWidget {
   static int get debugCachedBitmaps => _cache.length;
 
   @visibleForTesting
-  static void debugClearCache() {
+  static void debugClearCache() => trimMemory();
+
+  /// Releases the cached bitmaps (memory trim). A mounted wallpaper keeps
+  /// its own handle; another chat blurs its picture again when opened.
+  static void trimMemory() {
     for (final image in _cache.values) {
       image.dispose();
     }

@@ -7,6 +7,7 @@ import 'package:chatloom/personal/personal_client.dart';
 import 'package:chatloom/personal/privacy.dart';
 import 'package:chatloom/personal/private_avatar.dart';
 import 'package:chatloom/personal/push_rule_mirror.dart';
+import 'package:flutter/foundation.dart' show setEquals;
 import 'package:matrix/matrix.dart';
 import 'package:personal_core/personal_core.dart';
 
@@ -549,21 +550,37 @@ class InboxProjection {
       placement: placementFor(representative),
       unread: sourceRooms.any(personalRoomUnread),
       unreadCount: sourceRooms.fold(0, (n, r) => n + r.notificationCount),
-      hasDraft:
-          (_text(personal.values['draft:$entity']?['text']) ?? '').isNotEmpty ||
-          personal.conflicts.containsKey('draft:$entity') ||
-          sourceRooms.any(
-            (r) =>
-                (_text(personal.values['draft:${r.id}']?['text']) ?? '')
-                    .isNotEmpty ||
-                personal.conflicts.containsKey('draft:${r.id}'),
-          ),
+      hasDraft: _hasDraft(entity, sourceRooms.map((r) => r.id)),
       unanswered: unanswered,
       movedDown: _movedDown(entity, lastEvents),
       lastActivity: lastActivity,
     );
     return (record, representative);
   }
+
+  /// Whether the row of [entity] (sources [roomIds]) shows a draft: a
+  /// non-empty one of the entity or of a source chat, or a draft conflict.
+  bool _hasDraft(String entity, Iterable<String> roomIds) {
+    bool has(String id) =>
+        (_text(personal.values['draft:$id']?['text']) ?? '').isNotEmpty ||
+        personal.conflicts.containsKey('draft:$id');
+    return has(entity) || roomIds.any(has);
+  }
+
+  /// A condition every record [filter] selects meets (see [projectInbox]);
+  /// null where the view needs the broader rules. Pre-filtering by it never
+  /// changes the result, only how many records are matched and sorted.
+  static bool Function(InboxRecord)? _necessaryFor(InboxFilter filter) =>
+      switch (filter) {
+        InboxFilter.unread => (record) => record.unread,
+        InboxFilter.requests => (record) => record.messageRequest,
+        InboxFilter.drafts => (record) => record.hasDraft,
+        InboxFilter.unanswered => (record) => record.unanswered,
+        InboxFilter.archive => (record) => record.metadata.archived,
+        InboxFilter.lowPriority => (record) => record.metadata.lowPriority,
+        InboxFilter.technical => (record) => record.technical,
+        _ => null,
+      };
 
   /// Applies the private view rules to an index (pure, no state reads except
   /// the cached due-reminder set).
@@ -573,9 +590,13 @@ class InboxProjection {
     String query = '',
   }) {
     final records = index.records;
+    // A record a view can never select is dropped before [projectInbox]
+    // builds its search text and sorts: the Unread and Requests chip counts
+    // run on every inbox change and used to sort the whole inbox twice.
+    final necessary = _necessaryFor(filter);
     // Legacy labels remain stored, but no longer control inbox visibility.
     final visible = projectInbox(
-      records,
+      necessary == null ? records : records.where(necessary),
       filter: filter == InboxFilter.label ? InboxFilter.inbox : filter,
       query: query,
     );
@@ -627,14 +648,56 @@ class InboxIndex {
   final Map<String, PersonGroup> _members;
   final _records = <String, InboxRecord>{};
   final _representatives = <String, Room>{};
+  // The source room ids of every record, by entity.
+  final _sources = <String, List<String>>{};
   // The last event id of every source room when its record was computed.
   final _lastEventIds = <String, String?>{};
   List<InboxRecord>? _list;
   InboxIndex._(this.projection, this._available, this._members);
 
+  /// Bumped by [updateRooms] when a record changed in a way a view's
+  /// selection or order can see ([sameSelection]); a sync that only moves a
+  /// receipt, a delivery tick or a preview text leaves it as is, so the
+  /// inbox keeps its sorted selection.
+  int selectionRevision = 0;
+
+  /// Bumped by [updateRooms] when a record's networks or technical flag
+  /// changed (the inbox's network list must be recomputed).
+  int networkRevision = 0;
+
+  /// Whether [a] and [b] select and sort identically in every view: every
+  /// field [projectInbox] and [InboxProjection.select] read. The unread
+  /// count is not one of them (views read [InboxRecord.unread]).
+  static bool sameSelection(InboxRecord a, InboxRecord b) {
+    final x = a.metadata, y = b.metadata;
+    return a.representativeRoomId == b.representativeRoomId &&
+        a.entityId == b.entityId &&
+        a.displayName == b.displayName &&
+        a.isGroup == b.isGroup &&
+        a.technical == b.technical &&
+        a.messageRequest == b.messageRequest &&
+        a.placement == b.placement &&
+        a.unread == b.unread &&
+        a.hasDraft == b.hasDraft &&
+        a.unanswered == b.unanswered &&
+        a.movedDown == b.movedDown &&
+        a.lastActivity == b.lastActivity &&
+        setEquals(a.networks, b.networks) &&
+        setEquals(a.labelKeys, b.labelKeys) &&
+        x.pinOrder == y.pinOrder &&
+        x.archived == y.archived &&
+        x.lowPriority == y.lowPriority &&
+        x.mutedFlag == y.mutedFlag &&
+        x.mutedUntil == y.mutedUntil &&
+        x.ignored == y.ignored &&
+        x.placement == y.placement &&
+        setEquals(x.labelIds, y.labelIds);
+  }
+
   void _put(String entity, (InboxRecord, Room) value, List<Room> sources) {
     _records[entity] = value.$1;
     _representatives[value.$2.id] = value.$2;
+    _sources[entity] = [for (final room in sources) room.id];
     for (final room in sources) {
       _lastEventIds[room.id] = room.lastEvent?.eventId;
     }
@@ -653,6 +716,41 @@ class InboxIndex {
       _records[_members[room.id] == null
           ? room.id
           : 'person:${_members[room.id]!.id}'];
+
+  /// Applies changed drafts ([draftKeys]: `draft:<room id>` or
+  /// `draft:person:<group id>`) in place: only the owning record's
+  /// [InboxRecord.hasDraft] can change (rows read the draft text live). A
+  /// draft of a conversation without a row changes nothing. Returns false
+  /// for anything else; the caller then builds a new index.
+  bool updateDrafts(Iterable<String> draftKeys) {
+    final entities = <String>{};
+    for (final key in draftKeys) {
+      if (!key.startsWith('draft:')) return false;
+      final target = key.substring('draft:'.length);
+      if (_records.containsKey(target)) {
+        entities.add(target);
+        continue;
+      }
+      final group = _members[target];
+      if (group != null) {
+        final entity = 'person:${group.id}';
+        if (!_records.containsKey(entity)) return false;
+        entities.add(entity);
+        continue;
+      }
+      // A chat of this index always has a record; be safe if it has not.
+      if (_available.containsKey(target)) return false;
+    }
+    for (final entity in entities) {
+      final previous = _records[entity]!;
+      final hasDraft = projection._hasDraft(entity, _sources[entity]!);
+      if (hasDraft == previous.hasDraft) continue;
+      _records[entity] = previous.withDraft(hasDraft);
+      _list = null;
+      selectionRevision++;
+    }
+    return true;
+  }
 
   /// Recomputes the records of [roomIds] in place. Returns false when the
   /// change may affect other records (room set, merged persons, bridges) and
@@ -688,11 +786,20 @@ class InboxIndex {
     }
     for (final room in changed) {
       projection.forgetEntity(room.id);
-      _put(
-        room.id,
-        projection._record(room, room.id, null, [room], _records[room.id]),
-        [room],
-      );
+      final previous = _records[room.id];
+      final next = projection._record(room, room.id, null, [room], previous);
+      _put(room.id, next, [room]);
+      final record = next.$1;
+      if (previous == null || !sameSelection(previous, record)) {
+        selectionRevision++;
+      }
+      // Only ungrouped rooms get here: a room's own classification is its
+      // whole contribution to the network list.
+      if (previous == null ||
+          previous.technical != record.technical ||
+          !setEquals(previous.networks, record.networks)) {
+        networkRevision++;
+      }
     }
     return true;
   }

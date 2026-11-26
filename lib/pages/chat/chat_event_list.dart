@@ -94,8 +94,10 @@ class _ChatEventListState extends State<ChatEventList>
 
   /// The timeline the user last scrolled by hand. Newer messages load by
   /// themselves only after that (reading down), never while the chat
-  /// positions itself after a jump or on opening.
-  Timeline? _userScrolled;
+  /// positions itself after a jump or on opening. Weak: a timeline the chat
+  /// has replaced (jump back to the latest, a bounded reload) must not stay
+  /// in memory, with all its events, until the next scroll.
+  WeakReference<Timeline>? _userScrolled;
 
   /// The day of the pill's label, for its tap (jump to date).
   DateTime? _pillDay;
@@ -225,7 +227,8 @@ class _ChatEventListState extends State<ChatEventList>
     if (notification.depth != 0) return false;
     if (notification is UserScrollNotification) {
       if (_rows.isNotEmpty && notification.direction != ScrollDirection.idle) {
-        _userScrolled = controller.timelineFor(_rows.first);
+        final scrolled = controller.timelineFor(_rows.first);
+        _userScrolled = scrolled == null ? null : WeakReference(scrolled);
       }
       if (notification.direction == ScrollDirection.idle) {
         _hidePill();
@@ -501,7 +504,7 @@ class _ChatEventListState extends State<ChatEventList>
                       : controller.timelineFor(events.first);
                   if (controller.autoLoadFuture &&
                       timeline != null &&
-                      identical(timeline, _userScrolled)) {
+                      identical(timeline, _userScrolled?.target)) {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted && controller.autoLoadFuture) {
                         controller.requestFuture(quiet: true);

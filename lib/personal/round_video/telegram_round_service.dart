@@ -91,7 +91,12 @@ class TelegramRoundService extends ChangeNotifier
   bool _closed = false;
   bool capturing = false;
   final _reporting = <String>{};
+
+  /// Playback receipts sent in this run, oldest first. Bounded: a receipt
+  /// older than [_reportedLimit] newer ones counts as after a restart (the
+  /// "Mark listened" choice itself is kept durably in [_voiceMarks]).
   final _reported = <String>{};
+  static const _reportedLimit = 512;
 
   /// Where an account keeps the voice notes it marked listened: its
   /// encrypted private store on this device. Tests replace it.
@@ -109,11 +114,52 @@ class TelegramRoundService extends ChangeNotifier
       if (!_closed) notifyListeners();
     },
   );
+
+  /// Verified media states read from protected storage, least recently
+  /// used first. Only a cache of the store: an evicted state (known or known
+  /// absent) is read again by [mediaState] or [preloadMediaStates], and a
+  /// bubble keeps its last state meanwhile.
   final _states = <String, Map<String, dynamic>?>{};
+  static const _stateCacheLimit = 512;
   final _forwardTails = <String, Future<void>>{};
   String _stateKey(Event event) => '${event.room.id}:${event.eventId}';
-  Map<String, dynamic>? verifiedMediaStateSnapshot(Event event) =>
-      _states[_stateKey(event)];
+  Map<String, dynamic>? verifiedMediaStateSnapshot(Event event) {
+    final key = _stateKey(event);
+    return _states.containsKey(key) ? _touchState(key) : null;
+  }
+
+  Map<String, dynamic>? _touchState(String key) {
+    final state = _states.remove(key);
+    return _states[key] = state;
+  }
+
+  Map<String, dynamic>? _cacheState(String key, Map<String, dynamic>? state) {
+    _states.remove(key);
+    _states[key] = state;
+    while (_states.length > _stateCacheLimit) {
+      _states.remove(_states.keys.first);
+    }
+    return state;
+  }
+
+  /// Size of the verified-state cache; tests only.
+  @visibleForTesting
+  int get debugCachedStates => _states.length;
+
+  /// Size of this run's playback receipt record; tests only.
+  @visibleForTesting
+  int get debugReportedCount => _reported.length;
+
+  /// Records a sent playback receipt as [_reportPlayed] does; tests only.
+  @visibleForTesting
+  void debugMarkReported(Event event) => _noteReported(_stateKey(event));
+
+  void _noteReported(String key) {
+    _reported.add(key);
+    while (_reported.length > _reportedLimit) {
+      _reported.remove(_reported.first);
+    }
+  }
 
   /// True once the verified reverse state for [event] was loaded, including a
   /// known absence (no row). Distinguishes "known null" from "not loaded".
@@ -345,7 +391,7 @@ class TelegramRoundService extends ChangeNotifier
   /// (null: known to have none).
   @visibleForTesting
   void debugSetMediaState(Event event, Map<String, dynamic>? state) {
-    _states[_stateKey(event)] = state;
+    _cacheState(_stateKey(event), state);
     notifyListeners();
   }
 
@@ -1248,7 +1294,8 @@ class TelegramRoundService extends ChangeNotifier
                 .operation('playback_receipts')
                 .allowed ==
             true &&
-        _states[key]?['media_unread'] != false &&
+        (_states.containsKey(key) ? _touchState(key) : null)?['media_unread'] !=
+            false &&
         _voiceMarks.ready &&
         !_voiceMarks.contains(key);
   }
@@ -1351,7 +1398,7 @@ class TelegramRoundService extends ChangeNotifier
         ),
       );
       if (result != null) {
-        _reported.add(key);
+        _noteReported(key);
         notifyListeners();
       } else {
         notSent();
@@ -1627,10 +1674,9 @@ class TelegramRoundService extends ChangeNotifier
       data['revision'] as int,
       data,
     )) {
-      _states['${event.room.id}:$sourceId'] = await _store!.getMediaState(
-        client.userID!,
-        event.room.id,
-        sourceId,
+      _cacheState(
+        '${event.room.id}:$sourceId',
+        await _store!.getMediaState(client.userID!, event.room.id, sourceId),
       );
       notifyListeners();
     }
@@ -1638,13 +1684,12 @@ class TelegramRoundService extends ChangeNotifier
 
   Future<Map<String, dynamic>?> mediaState(Event event) async {
     final key = _stateKey(event);
-    if (_states.containsKey(key)) return _states[key];
+    if (_states.containsKey(key)) return _touchState(key);
     await initialize();
-    if (_states.containsKey(key)) return _states[key];
-    return _states[key] = await _store!.getMediaState(
-      client.userID!,
-      event.room.id,
-      event.eventId,
+    if (_states.containsKey(key)) return _touchState(key);
+    return _cacheState(
+      key,
+      await _store!.getMediaState(client.userID!, event.room.id, event.eventId),
     );
   }
 
@@ -1665,7 +1710,8 @@ class TelegramRoundService extends ChangeNotifier
     );
     for (final id in missing) {
       // A newer verified state may have arrived while the query ran.
-      _states.putIfAbsent('${room.id}:$id', () => found[id]);
+      final key = '${room.id}:$id';
+      if (!_states.containsKey(key)) _cacheState(key, found[id]);
     }
   }
 
