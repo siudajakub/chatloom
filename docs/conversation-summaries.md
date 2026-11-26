@@ -25,13 +25,14 @@ its active operation.
 
 ## Model and prompt
 
-The worker uses [Nemotron 3.5 Lightning](https://openrouter.ai/nvidia/nemotron-3.5-lightning)
-through OpenRouter for brief and standard summaries and for questions. It
-caps eligible provider rates at $0.07 per million input and $0.20 per million
-output tokens. Detailed summaries and inputs above 240,000 UTF-8 bytes use
-[Gemini 3.1 Flash Lite](https://openrouter.ai/google/gemini-3.1-flash-lite)
-at caps of $0.25 input and $1.50 output per million tokens. Provider routing
-prioritizes throughput and requires zero data retention and no data collection.
+The worker uses [GPT-6 Luna](https://openrouter.ai/openai/gpt-6-luna)
+through OpenRouter for every summary length and for questions (since
+2026-11-26; Nemotron 3.5 Lightning invented facts in answers and Gemini 3.1
+Flash Lite missed facts in detailed summaries in a judged comparison). It caps
+provider rates at $0.10 per million input and $0.50 per million output tokens;
+its 1M-token context covers the whole source limit. Provider routing requires
+zero data retention and no data collection; reasoning is off and no
+temperature is sent, because the model's ZDR endpoint refuses it.
 The model has no tools or browsing access.
 
 The prompt treats message bodies, speaker names and transcripts as untrusted

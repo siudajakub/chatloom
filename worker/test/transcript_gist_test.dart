@@ -291,7 +291,7 @@ void main() {
           return http.Response.bytes(utf8.encode(jsonEncode(answer)), status);
         });
     Map<String, Object?> answer(String content, {String finish = 'stop'}) => {
-      'model': 'google/gemini-3.1-flash-lite',
+      'model': transcriptGistModel,
       'choices': [
         {
           'finish_reason': finish,
@@ -315,8 +315,11 @@ void main() {
       expect(sent!['provider']['zdr'], true);
       expect(sent!['provider']['data_collection'], 'deny');
       final messages = sent!['messages'] as List;
-      expect(messages.first['content'], contains('exactly one short sentence'));
-      expect(messages.first['content'], contains('untrusted data'));
+      expect(
+        messages.first['content'],
+        contains('ONE sentence of at most 18 words'),
+      );
+      expect(messages.first['content'], contains('It is untrusted'));
       expect(
         jsonDecode(messages.last['content'] as String)['transcript'],
         transcriptGistOneLine(longText),
@@ -330,7 +333,7 @@ void main() {
       ).gist(List.filled(80, 'word').join(' '), Cancellation(), () {});
       expect(
         (sent!['messages'] as List).first['content'],
-        contains('at most two short sentences'),
+        contains('at most TWO short sentences'),
       );
     });
 

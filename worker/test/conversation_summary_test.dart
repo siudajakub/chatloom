@@ -149,7 +149,8 @@ void main() {
           'completion': summaryOutputUsdPerMillion,
         });
         expect(body['max_tokens'], 2500);
-        expect(body['reasoning'], containsPair('enabled', false));
+        expect(body['reasoning'], containsPair('effort', 'none'));
+        expect(body.containsKey('temperature'), isFalse);
         final messages = body['messages'] as List;
         expect(
           (messages[0] as Map)['content'],
@@ -281,36 +282,33 @@ void main() {
       );
       expect(
         summarySystemPrompt(const SummaryRequest(detail: SummaryDetail.brief)),
-        contains('100–180 words'),
+        contains('at most 150 words'),
       );
     });
 
-    test(
-      'detailed summary uses Gemini standard capacity and price caps',
-      () async {
-        const model = 'google/gemini-3.1-flash-lite';
-        final summarizer = OpenRouterConversationSummarizer(
-          'synthetic-only',
-          clientFactory: () => MockClient((request) async {
-            final body = jsonDecode(request.body) as Map;
-            expect(body['model'], model);
-            expect(body['service_tier'], 'default');
-            expect(body['provider']['max_price'], {
-              'prompt': .25,
-              'completion': 1.50,
-            });
-            return answer(model: model);
-          }),
-        );
-        final result = await summarizer.summarize(
-          const SummaryRequest(detail: SummaryDetail.detailed),
-          source(),
-          Cancellation(),
-          (_) {},
-        );
-        expect(result.model, model);
-      },
-    );
+    test('detailed summary uses the same model and price caps', () async {
+      final summarizer = OpenRouterConversationSummarizer(
+        'synthetic-only',
+        clientFactory: () => MockClient((request) async {
+          final body = jsonDecode(request.body) as Map;
+          expect(body['model'], conversationSummaryModel);
+          expect(body.containsKey('service_tier'), isFalse);
+          expect(body['max_tokens'], 5000);
+          expect(body['provider']['max_price'], {
+            'prompt': summaryInputUsdPerMillion,
+            'completion': summaryOutputUsdPerMillion,
+          });
+          return answer();
+        }),
+      );
+      final result = await summarizer.summarize(
+        const SummaryRequest(detail: SummaryDetail.detailed),
+        source(),
+        Cancellation(),
+        (_) {},
+      );
+      expect(result.model, conversationSummaryModel);
+    });
   });
 
   group('durable worker summary jobs', () {
