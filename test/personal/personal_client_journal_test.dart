@@ -570,6 +570,83 @@ void main() {
     expect(store.watermark?.eventId, r'$hb-83');
   });
 
+  test('a long-running journal timeline stays bounded after replays, '
+      'keeping held events reachable', () async {
+    final store = _Store();
+    final journal = _Journal();
+    journal.history
+      ..add(_create(journal))
+      ..add(
+        _metadata(
+          journal,
+          'late-device',
+          _min(1),
+          'org:late',
+          1,
+          senderKey: 'synthetic-new-device',
+        ),
+      );
+    for (var i = 2; i <= 300; i++) {
+      journal.history.add(_heartbeat(journal, 'hb-$i', _min(i)));
+    }
+    final personal = _start(client, store, journal);
+    addTearDown(personal.dispose);
+    await personal.load();
+    expect(personal.ready, isTrue);
+    expect(store.watermark?.held, [r'$late-device']);
+    final timeline = journal.timeline;
+    final opened = journal.timelines.length;
+    final requests = timeline.requests;
+    expect(timeline.events.length, 301, reason: 'Under the attach bound');
+
+    // Days of uptime: a heartbeat every five minutes, a result now and then.
+    var largest = 0;
+    for (var i = 301; i <= 1400; i++) {
+      timeline.deliver(
+        i == 900
+            ? _metadata(journal, 'live-result', _min(i), 'org:live', 900)
+            : _heartbeat(journal, 'hb-$i', _min(i)),
+      );
+      if (i % 10 == 0) {
+        await _idle();
+        largest = max(largest, timeline.events.length);
+      }
+    }
+    await _idle();
+    expect(personal.problem, isNull);
+    expect(personal.values['org:live'], {'n': 900});
+    expect(store.watermark?.eventId, r'$hb-1400');
+    expect(store.watermark?.held, [r'$late-device']);
+    expect(personal.workerReadiness?.receivedAt, _min(1400));
+    expect(
+      largest,
+      lessThanOrEqualTo(1010),
+      reason: 'Re-bounded once it holds twice the retained events',
+    );
+    expect(timeline.events.length, inInclusiveRange(500, 1000));
+    expect(
+      timeline.events.any((event) => event.eventId == r'$late-device'),
+      isFalse,
+    );
+    expect(timeline.events.first.eventId, r'$hb-1400');
+    expect(
+      journal.timelines,
+      hasLength(opened),
+      reason: 'Trimmed in place: no new timeline, no pagination',
+    );
+    expect(timeline.requests, requests);
+
+    // The held result left the timeline but is still applied once trusted;
+    // the rescan keeps the newest heartbeat.
+    client.verify('synthetic-new-device');
+    client.onSync.add(SyncUpdate(nextBatch: 'device-verified'));
+    await _idle();
+    expect(personal.values['org:late'], {'n': 1});
+    expect(store.watermark?.held, isEmpty);
+    expect(personal.workerReadiness?.receivedAt, _min(1400));
+    expect(journal.eventReads, isEmpty);
+  });
+
   test(
     'a result from a not yet verified own device is held, then applied',
     () async {

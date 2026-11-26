@@ -364,6 +364,102 @@ void main() {
     });
   });
 
+  group('start-up off screen (2026-11-26)', () {
+    late List<String> applied;
+    late ConnectionStatusMonitor monitor;
+    MobileSyncLifecycle lifecycle(List<Client> clients) => MobileSyncLifecycle(
+      clients: () => clients,
+      monitorOf: (_) => monitor,
+      apply: (Client client, {required bool foreground, bool catchUp = false}) {
+        applied.add(
+          '${client.clientName} ${foreground ? 'on' : 'off'}'
+          '${catchUp ? ' catch-up' : ''}',
+        );
+        return null;
+      },
+    );
+
+    setUp(() {
+      applied = [];
+      final client = _HangingClient();
+      monitor = ConnectionStatusMonitor(
+        statuses: () => client.onSyncStatus.stream,
+        current: () => client.onSyncStatus.value,
+        firstSync: () => false,
+        hasNetwork: () async => true,
+      );
+      addTearDown(monitor.dispose);
+    });
+
+    test('a client restored off screen keeps its loop off until shown', () {
+      fakeAsync((clock) {
+        final restored = _HangingClient();
+        final running = _HangingClient();
+        // The loop as the client's init starts it.
+        unawaited(restored.oneShotSync());
+        clock.flushMicrotasks();
+        expect(restored.timeouts, [30000]);
+        expect(
+          MobileSyncLifecycle.holdWhileAway(restored, AppLifecycleState.paused),
+          isTrue,
+        );
+        expect(MobileSyncLifecycle.isHeld(restored), isTrue);
+        restored.answer(0);
+        clock.elapse(const Duration(hours: 1));
+        expect(restored.timeouts, [30000], reason: 'no long-poll while away');
+        expect(clock.pendingTimers, isEmpty);
+        // The GUI is built when the app is shown: only the held loop starts,
+        // with a catch-up; a loop the startup left running is not touched.
+        lifecycle([restored, running]).seed(AppLifecycleState.resumed);
+        expect(applied, ['synthetic-lifecycle on catch-up']);
+        expect(MobileSyncLifecycle.isHeld(restored), isFalse);
+        unawaited(restored.dispose(closeDatabase: false));
+        clock.elapse(const Duration(minutes: 2));
+      });
+    });
+
+    test('on screen or unknown: nothing is held', () {
+      final client = _HangingClient();
+      for (final state in [
+        null,
+        AppLifecycleState.resumed,
+        AppLifecycleState.inactive,
+      ]) {
+        expect(MobileSyncLifecycle.holdWhileAway(client, state), isFalse);
+      }
+      expect(MobileSyncLifecycle.isHeld(client), isFalse);
+      lifecycle([client]).seed(AppLifecycleState.resumed);
+      expect(applied, isEmpty, reason: 'the running loop is left alone');
+    });
+
+    test('a GUI started off screen stops every loop', () {
+      final client = _HangingClient();
+      final phone = lifecycle([client])..seed(AppLifecycleState.paused);
+      expect(applied, ['synthetic-lifecycle off']);
+      expect(monitor.foreground, isFalse);
+      expect(phone.foreground, isFalse);
+      // A later seed (another surface) changes nothing.
+      phone.seed(AppLifecycleState.resumed);
+      expect(applied, ['synthetic-lifecycle off']);
+      phone.onLifecycle(AppLifecycleState.resumed);
+      expect(applied, [
+        'synthetic-lifecycle off',
+        'synthetic-lifecycle on catch-up',
+      ]);
+    });
+
+    test('coming back also starts a loop held while the GUI was away', () {
+      final client = _HangingClient();
+      final phone = lifecycle([client])..seed(AppLifecycleState.resumed);
+      phone.onLifecycle(AppLifecycleState.paused);
+      applied.clear();
+      MobileSyncLifecycle.holdWhileAway(client, AppLifecycleState.paused);
+      phone.onLifecycle(AppLifecycleState.resumed);
+      expect(applied, ['synthetic-lifecycle on catch-up']);
+      expect(MobileSyncLifecycle.isHeld(client), isFalse);
+    });
+  });
+
   // Real async: the catch-up awaits stream cancellations, which complete in
   // the root zone where a fake clock cannot flush them.
   test(

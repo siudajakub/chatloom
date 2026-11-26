@@ -2,14 +2,19 @@
 // Fictional, account-free fixtures for the smoothness benchmarks: a large
 // inbox and a long conversation built from the offline conversation
 // fixtures. No network, no account, no real storage (shared preferences are
-// mocked and the private client never opens its database), so they are
-// safe on a device next to the real app's data.
+// mocked, the private client never opens its database and the device-local
+// registries keep the fixture's entries in memory), so they are safe on a
+// device next to the real app's data.
 import 'package:chatloom/config/setting_keys.dart';
 import 'package:chatloom/l10n/l10n.dart';
 import 'package:chatloom/pages/chat/chat.dart';
 import 'package:chatloom/pages/chat_list/chat_list.dart';
 import 'package:chatloom/pages/chat_list/chat_list_body.dart';
+import 'package:chatloom/personal/hidden_messages.dart';
+import 'package:chatloom/personal/kept_messages.dart';
 import 'package:chatloom/personal/personal_client.dart';
+import 'package:chatloom/personal/seen_positions.dart';
+import 'package:chatloom/personal/view_once_openings.dart';
 import 'package:chatloom/ui/notion/notion.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:chatloom/widgets/matrix.dart';
@@ -24,6 +29,31 @@ import '../notion/conversation_test_support.dart';
 Future<void> initPerfSettings() async {
   SharedPreferences.setMockInitialValues({});
   await AppSettings.init(loadWebConfigFile: false);
+}
+
+bool _memoryRegistries = false;
+
+/// The device-local registries (hidden, kept, seen positions, view-once)
+/// keep a [PerfClient]'s entries in memory: the fixture's private client
+/// has no local store, so their default storage could never load and the
+/// inbox would stay on "Saved chats could not be loaded" (an empty page).
+/// Other clients keep their storage, so the benchmark is safe next to the
+/// real app's data on a device. Installed once per process.
+void _useMemoryRegistries() {
+  if (_memoryRegistries) return;
+  _memoryRegistries = true;
+  final hidden = HiddenMessages.instance.storageFor;
+  HiddenMessages.instance.storageFor = (client) =>
+      client is PerfClient ? null : hidden(client);
+  final kept = KeptMessages.instance.storageFor;
+  KeptMessages.instance.storageFor = (client) =>
+      client is PerfClient ? null : kept(client);
+  final seen = SeenPositions.instance.storageFor;
+  SeenPositions.instance.storageFor = (client) =>
+      client is PerfClient ? null : seen(client);
+  final opened = ViewOnceOpenings.instance.storageFor;
+  ViewOnceOpenings.instance.storageFor = (client) =>
+      client is PerfClient ? null : opened(client);
 }
 
 class PerfClient extends ConversationClient {
@@ -53,6 +83,7 @@ const _lines = [
 /// An account with [rooms] chats, one or two messages each, newest first;
 /// every fifth chat has unread messages.
 ({PerfClient client, List<PerfRoom> rooms}) perfInbox({int rooms = 300}) {
+  _useMemoryRegistries();
   final client = PerfClient();
   final list = <PerfRoom>[];
   for (var i = 0; i < rooms; i++) {
@@ -74,6 +105,7 @@ const _lines = [
 /// A chat with [events] messages: alternating senders, varied lengths and a
 /// reply every seventh message.
 ({PerfClient client, PerfRoom room}) perfConversation({int events = 500}) {
+  _useMemoryRegistries();
   final client = PerfClient();
   final room = PerfRoom(client, '!perf-chat:example.invalid');
   Event? previous;

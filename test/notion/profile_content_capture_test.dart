@@ -313,13 +313,14 @@ void main() {
           await tester.pumpAndSettle();
         }
         if (state == 'sources') {
-          // A row every chat has (the capabilities row is bridged-only).
+          // A source row every chat has: the capabilities row is
+          // bridged-only and Participants is groups-only (36411b748).
           await tester.scrollUntilVisible(
-            find.text('Participants'),
+            find.text('Encryption & recovery'),
             250,
             scrollable: find.byType(Scrollable).first,
           );
-          await tester.ensureVisible(find.text('Participants'));
+          await tester.ensureVisible(find.text('Encryption & recovery'));
           await tester.pumpAndSettle();
         }
         if (state == 'partial') {

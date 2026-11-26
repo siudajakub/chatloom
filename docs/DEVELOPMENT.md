@@ -58,6 +58,57 @@ Unit, widget and golden tests use fictional fixtures only. They do not prove
 end-to-end encryption, push delivery or native behaviour on a real account;
 record those checks separately for each device and network.
 
+## Performance snapshot
+
+An app nobody touches should draw no frames and use ~0 % CPU.
+
+- `test/perf/idle_frames_test.dart` is the automated gate: the main screens
+  (inbox, conversation, merged conversation, chat details, settings, and the
+  production inbox and chat page over fictional fixtures) must stop asking
+  for frames after their entrance motion, keep no periodic timer armed and
+  stay silent for ten fake minutes; with tickers off (`TickerMode`, or
+  `NotionActivity` while the app is inactive) they must not draw at all.
+- `scripts/android/perf-snapshot.sh [-s SERIAL] [-t SECONDS] [--perf]` measures
+  the installed app on a device over an idle window: Flutter surface frames
+  (SurfaceFlinger), HWUI frames (`dumpsys gfxinfo … framestats`), process CPU,
+  `dumpsys meminfo` and a `dumpsys batterystats --charged` summary. Start the
+  app, open the screen to measure, keep the screen on and do not touch it.
+- `scripts/macos/perf-snapshot.sh [-t SECONDS]` samples the running ChatLoom
+  app with `top -l` (CPU, idle wakeups, Energy Impact, memory) and prints
+  `footprint` or `vmmap --summary` when available.
+
+Both scripts print aggregate numbers only (no message content or
+identifiers beyond the package or process name) and never launch, stop or
+clear the app. Frame timing under interaction is covered separately by
+[the benchmarks](performance-benchmarks.md).
+
+## Performance tests
+
+`test/perf/` is one gate that runs on Linux without a device or account
+(fictional fixtures, fake time):
+
+```sh
+python3 scripts/flutter-queue.py --timeout 1800 test test/perf
+```
+
+On the shared devbox, run it under the heavy-job lock with `flock` and
+`nice`, like every other Flutter job there.
+
+- `idle_frames_test.dart`: idle screens draw no frames and keep no timer.
+- `frame_budget_test.dart`: rebuilds per interaction (inbox and chat fling,
+  syncs during a fling, chat open/close, composer focus) stay within the
+  budgets in the test, and the screen goes idle afterwards. Each measured
+  window prints `rebuilds: Type: n, …`.
+- `inbox_sync_work_test.dart`: an inbox publish costs O(changed rooms).
+
+Count rebuilds with `countRebuilds` (`test/perf/rebuild_counter.dart`): it
+counts rebuilds of elements that were on screen before the window. Do not
+filter on the `builtOnce` argument of `debugOnRebuildDirtyWidget`; Flutter
+tracks it only while `debugPrintRebuildDirtyWidgets` is on, so such a filter
+counts nothing. `perfInbox()` keeps the fixture's device-local registries in
+memory; wait with `perfInboxRows` and assert rows exist before measuring, or
+the benchmark measures an empty page.
+
 ## Logo and icons
 
 The logo, app icons, splash images and notification icon are rendered from

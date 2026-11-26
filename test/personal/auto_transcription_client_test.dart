@@ -240,6 +240,20 @@ void main() {
     },
   );
 
+  test('the record of automatic requests stays bounded', () async {
+    for (var i = 0; i < 530; i++) {
+      expect(personal.autoTranscriptPending(voice(cloud, '\$bulk-$i')), isTrue);
+    }
+    await flushTimers();
+    expect(personal.requests, hasLength(530));
+    expect(personal.debugAutoRequestedCount, 512);
+    // A recent id stays recorded; an evicted one is still guarded by its job.
+    expect(personal.autoTranscriptPending(voice(cloud, r'$bulk-529')), isFalse);
+    expect(personal.autoTranscriptPending(voice(cloud, r'$bulk-0')), isFalse);
+    await flushTimers();
+    expect(personal.requests, hasLength(530));
+  });
+
   test('private dictation never triggers the incoming paid pipeline', () {
     final event = voice(cloud, r'$dictation', outgoing: true);
     event.content[DictationLimits.sourceMarker] = 'dictation-fixture';

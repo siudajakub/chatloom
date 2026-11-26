@@ -229,6 +229,38 @@ void main() {
       await _unmount(tester);
     });
 
+    testWidgets('a preload of the chat already open is dropped', (
+      tester,
+    ) async {
+      final controller = await _mountChat(tester, client, room);
+      expect(room.loads, 1);
+      // A second tap on the open chat's row: same page, nothing adopts it.
+      await ChatTimelinePreload.warm(room);
+      expect(room.loads, 2);
+      final other = _GatedRoom(client, '!open-other:example.invalid');
+      ChatTimelinePreload.discardFor(other);
+      await tester.pumpWidget(
+        Provider<MatrixState>.value(
+          value: ConversationMatrix(
+            client,
+            await SharedPreferences.getInstance(),
+          ),
+          child: MaterialApp(
+            localizationsDelegates: L10n.localizationsDelegates,
+            supportedLocales: L10n.supportedLocales,
+            home: ChatPage(roomId: room.id),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.state<ChatController>(find.byType(ChatPageWithRoom)),
+        same(controller),
+      );
+      expect(ChatTimelinePreload.take(room), isNull);
+      await _unmount(tester);
+    });
+
     testWidgets('a preload of another room is not adopted', (tester) async {
       final other = _GatedRoom(client, '!open-other:example.invalid');
       await ChatTimelinePreload.warm(other);

@@ -233,6 +233,54 @@ void main() {
     expect(backend.deviceRequests..sort(), ['session-a', 'session-c']);
   });
 
+  test('idle sessions beyond the limit are forgotten, watched and running '
+      'ones are kept', () async {
+    backend.verified = false; // each flow ends at once (verifySession)
+    final watched = _locked('watched', session: 'session-watched');
+    var watchedChanges = 0;
+    tracker.watch(watched).addListener(() => watchedChanges++);
+    tracker.ensureRequested(watched);
+    await _settle();
+    expect(tracker.stageOf(watched), KeyRecoveryStage.verifySession);
+    backend
+      ..verified = true
+      ..deviceGate = Completer<void>();
+    final running = _locked('running', session: 'session-running');
+    tracker.ensureRequested(running);
+    await _settle();
+    expect(tracker.stageOf(running), KeyRecoveryStage.devices);
+    backend.verified = false;
+    const limit = UndecryptableMessages.sessionLimit;
+    for (var i = 0; i < limit + 40; i++) {
+      tracker.ensureRequested(_locked('bulk-$i', session: 'session-$i'));
+    }
+    await _settle();
+    expect(tracker.debugTrackedSessions, limit);
+    // The newest sessions keep their state and are not asked again.
+    final newest = _locked('again', session: 'session-${limit + 39}');
+    final requests = backend.backupRequests.length;
+    tracker.ensureRequested(newest);
+    await _settle();
+    expect(backend.backupRequests, hasLength(requests));
+    expect(tracker.stageOf(newest), KeyRecoveryStage.verifySession);
+    // A watched bubble and a running request survive and still update.
+    expect(tracker.stageOf(watched), KeyRecoveryStage.verifySession);
+    final before = watchedChanges;
+    tracker.retry(watched);
+    await _settle();
+    expect(watchedChanges, before + 2, reason: 'backup, then verifySession');
+    backend.keys.add('session-running');
+    await _settle();
+    expect(tracker.stageOf(running), KeyRecoveryStage.keyReceived);
+    // A forgotten session is asked again when its bubble returns.
+    final oldest = _locked('bulk-0', session: 'session-0');
+    expect(tracker.stageOf(oldest), isNull);
+    tracker.ensureRequested(oldest);
+    await _settle();
+    expect(backend.backupRequests, hasLength(requests + 2));
+    backend.deviceGate!.complete();
+  });
+
   test('settled count ignores fresh and redacted events', () {
     final now = DateTime.utc(2026, 1, 1, 12);
     final events = [

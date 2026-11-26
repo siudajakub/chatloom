@@ -736,5 +736,35 @@ void main() {
       visible.value = true;
       expect(monitor.debugPollScheduled, isTrue);
     });
+
+    test('in the background no verdict timer waits either; coming back '
+        'evaluates at once (battery wave)', () async {
+      final monitor = BridgeHealthMonitor(
+        client,
+        clock: () => now,
+        whoami: (_) async => whoami(_bot, []),
+        watchLifecycle: false,
+      );
+      void listener() {}
+      monitor.addListener(listener);
+      addTearDown(() => monitor.removeListener(listener));
+      await pumpEventQueue();
+      // The answer gets old after a while: one timer for that moment.
+      expect(monitor.debugBoundaryScheduled, isTrue);
+
+      monitor.didChangeAppLifecycleState(AppLifecycleState.paused);
+      expect(monitor.debugBoundaryScheduled, isFalse);
+      expect(monitor.debugPollScheduled, isFalse);
+      // A change while away (here a sign-out) evaluates, schedules nothing.
+      monitor.noteSignedOut('whatsapp');
+      expect(monitor.debugBoundaryScheduled, isFalse);
+      expect(monitor.debugPollScheduled, isFalse);
+
+      now = now.add(const Duration(hours: 1));
+      monitor.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await pumpEventQueue();
+      expect(monitor.debugBoundaryScheduled, isTrue);
+      expect(monitor.debugPollScheduled, isTrue);
+    });
   });
 }

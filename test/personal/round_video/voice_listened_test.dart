@@ -244,6 +244,44 @@ void main() {
     expect(service.canMarkVoiceListened(voice), isFalse);
   });
 
+  test('the verified-state cache and the receipt record stay bounded, '
+      'recent entries kept', () async {
+    final room = _room();
+    final service = TelegramRoundService.of(room.client);
+    addTearDown(() => TelegramRoundService.closeFor(room.client));
+    await settle();
+    final template = _audio(room);
+    Event note(int i) => Event(
+      room: room,
+      type: EventTypes.Message,
+      content: template.content,
+      senderId: _sender,
+      eventId: '\$note-$i',
+      originServerTs: DateTime.utc(2026),
+    );
+    final onScreen = note(0);
+    service.debugSetMediaState(onScreen, {'media_unread': false});
+    for (var i = 1; i <= 600; i++) {
+      service.debugSetMediaState(note(i), {'media_unread': true});
+      // A bubble on screen reads its state on every rebuild.
+      expect(service.verifiedMediaStateSnapshot(onScreen), {
+        'media_unread': false,
+      });
+    }
+    expect(service.debugCachedStates, 512);
+    expect(service.isMediaStateKnown(onScreen), isTrue);
+    expect(service.isMediaStateKnown(note(600)), isTrue);
+    expect(service.isMediaStateKnown(note(1)), isFalse);
+
+    final recent = note(600);
+    expect(service.canMarkVoiceListened(recent), isTrue);
+    for (var i = 1; i <= 600; i++) {
+      service.debugMarkReported(note(i));
+    }
+    expect(service.debugReportedCount, 512);
+    expect(service.canMarkVoiceListened(recent), isFalse);
+  });
+
   group('VoiceListenedMarks', () {
     test('bounded, newest kept, written once loaded', () async {
       final storage = _Storage()

@@ -141,7 +141,10 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('stage barrier uses the media scrim token', (tester) async {
+  // Full-screen stages use an opaque media backdrop so the chat cannot show
+  // through the transcript (DESIGN.md, 2ade9a80f); it was the 72 % stage
+  // scrim before.
+  testWidgets('stage barrier is the opaque media backdrop', (tester) async {
     final stage = RoundStageController();
     final video = _video();
     addTearDown(video.dispose);
@@ -169,7 +172,8 @@ void main() {
     final route =
         ModalRoute.of(tester.element(find.byType(RoundVideoStage)))!
             as RoundStageRoute;
-    expect(route.barrierColor, NotionMediaColors.stageScrim);
+    expect(route.barrierColor, NotionMediaColors.viewer.withValues(alpha: 1));
+    expect(route.barrierColor!.a, 1, reason: 'the chat must not show through');
     stage.release(video);
     await tester.pumpAndSettle();
   });

@@ -23,6 +23,7 @@ import 'package:chatloom/personal/ui/contact_sheet.dart';
 import 'package:chatloom/personal/ui/message_request_callout.dart';
 import 'package:chatloom/personal/ui/network_action_flows.dart';
 import 'package:chatloom/personal/ui/notion_inbox_view_chips.dart';
+import 'package:chatloom/ui/notion/notion_switchers.dart';
 import 'package:chatloom/ui/notion/notion_theme.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -851,28 +852,33 @@ void main() {
       expect(NetworkChatActions.isDeleting(room), isFalse);
     });
 
-    testWidgets('the Requests chip appears only while there are requests', (
-      tester,
-    ) async {
-      await _mount(
-        tester,
-        const NotionInboxViewChips(
-          selected: InboxFilter.inbox,
-          onViewSelected: null,
-        ),
-      );
-      expect(find.text('Requests'), findsNothing);
-      await _mount(
-        tester,
-        const NotionInboxViewChips(
-          selected: InboxFilter.inbox,
-          onViewSelected: null,
-          requestCount: 2,
-        ),
-      );
-      expect(find.text('Requests'), findsOneWidget);
-      expect(find.text('2'), findsOneWidget);
-    });
+    // The chips are always Main, Aside and Requests (J, 2026-11-24); the
+    // Requests chip carries a count only while requests are waiting.
+    testWidgets(
+      'the Requests chip shows a count only while there are requests',
+      (tester) async {
+        await _mount(
+          tester,
+          const NotionInboxViewChips(
+            selected: InboxFilter.inbox,
+            onViewSelected: null,
+          ),
+        );
+        expect(find.text('Requests'), findsOneWidget);
+        expect(find.byType(NotionAnimatedCount), findsNothing);
+        await _mount(
+          tester,
+          const NotionInboxViewChips(
+            selected: InboxFilter.inbox,
+            onViewSelected: null,
+            requestCount: 2,
+          ),
+        );
+        expect(find.text('Requests'), findsOneWidget);
+        expect(find.text('2'), findsOneWidget);
+        expect(find.byType(NotionAnimatedCount), findsOneWidget);
+      },
+    );
   });
 
   test('the inbox controller rebuilds when a deletion starts', () async {

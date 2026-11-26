@@ -39,6 +39,42 @@ Event _media(
 );
 
 void main() {
+  test('grid tiles decode at their own size, covering the tile', () {
+    // A ~121 dp tile no longer decodes a fixed 240 dp box.
+    expect(
+      sharedMediaDecodeBox({
+        'info': {'w': 1000, 'h': 1000},
+      }, 121),
+      (128.0, 128.0),
+    );
+    // Landscape: the short side lands on the tile (no upscale under cover).
+    expect(
+      sharedMediaDecodeBox({
+        'info': {
+          'w': 4000,
+          'h': 3000,
+          'thumbnail_info': {'w': 800, 'h': 400},
+        },
+      }, 121),
+      (256.0, 128.0),
+    );
+    // Portrait from the full image info, extreme ratios bounded.
+    expect(
+      sharedMediaDecodeBox({
+        'info': {'w': 100, 'h': 1000},
+      }, 120),
+      (128.0, 384.0),
+    );
+    // Unknown aspect: 2 × tile, like the old fixed box for 2:1.
+    expect(sharedMediaDecodeBox({'info': <String, Object?>{}}, 121), (
+      256.0,
+      256.0,
+    ));
+    // Sub-pixel resizes keep the same decode (16 dp steps).
+    expect(sharedMediaDecodeBox({}, 113.2), sharedMediaDecodeBox({}, 127.9));
+    expect(sharedMediaDecodeBox({}, double.infinity), (240.0, 240.0));
+  });
+
   test('month labels are readable', () {
     expect(sharedMonthLabel(DateTime(2026, 10, 23)), 'October 2026');
     expect(sharedMonthLabel(DateTime(2025, 1, 1)), 'January 2025');

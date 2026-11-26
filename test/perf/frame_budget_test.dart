@@ -16,21 +16,16 @@ import 'package:material_ui/material_ui.dart';
 
 import 'perf_fixtures.dart';
 import 'perf_scenarios.dart';
+import 'rebuild_counter.dart';
 
-/// Rebuilds of already-built widgets, by type, while [body] runs.
-Future<Map<Type, int>> _rebuilds(Future<void> Function() body) async {
-  final counts = <Type, int>{};
-  debugOnRebuildDirtyWidget = (element, builtOnce) {
-    // Rows scrolled into view build for the first time; only count rebuilds.
-    if (!builtOnce) return;
-    final type = element.widget.runtimeType;
-    counts[type] = (counts[type] ?? 0) + 1;
-  };
-  try {
-    await body();
-  } finally {
-    debugOnRebuildDirtyWidget = null;
-  }
+/// Rebuilds of widgets already on screen, by type, while [body] runs.
+Future<Map<Type, int>> _rebuilds(
+  WidgetTester tester,
+  Future<void> Function() body,
+) async {
+  final counts = await countRebuilds(tester, body);
+  // Printed so a budget change has its evidence in the log.
+  debugPrint('rebuilds: ${describeRebuilds(counts, top: 30)}');
   return counts;
 }
 
@@ -51,10 +46,14 @@ void main() {
     addTearDown(tester.view.reset);
     final fixture = perfInbox();
     await tester.pumpWidget(perfApp(fixture.client, const PerfInbox()));
+    await perfInboxRows(tester);
     await perfFrames(tester, const Duration(seconds: 2));
     expect(find.byType(NotionInboxRow), findsWidgets);
 
-    final rebuilds = await _rebuilds(() => perfInboxFling(tester, rounds: 2));
+    final rebuilds = await _rebuilds(
+      tester,
+      () => perfInboxFling(tester, rounds: 2),
+    );
     expect(rebuilds[ChatListViewBody] ?? 0, 0);
     expect(rebuilds[NotionInboxPage] ?? 0, 0);
     expect(rebuilds[NotionInboxRow] ?? 0, 0, reason: 'rows only moved');
@@ -71,14 +70,20 @@ void main() {
     addTearDown(tester.view.reset);
     final fixture = perfInbox();
     await tester.pumpWidget(perfApp(fixture.client, const PerfInbox()));
+    await perfInboxRows(tester);
     await perfFrames(tester, const Duration(seconds: 2));
+    expect(find.byType(NotionInboxRow), findsWidgets);
 
     final rebuilds = await _rebuilds(
+      tester,
       () => perfInboxFlingWithSyncs(tester, fixture.client, fixture.rooms),
     );
     // Publishes are coalesced (debounce 250 ms, at most 1 s): 20 syncs in
     // one second must not mean 20 page rebuilds.
     expect(rebuilds[NotionInboxPage] ?? 0, lessThanOrEqualTo(8));
+    // Each sync changes one row: at most that row rebuilds (a row that
+    // moves to the top is re-inflated instead and is not counted).
+    expect(rebuilds[NotionInboxRow] ?? 0, lessThanOrEqualTo(20));
     await perfFrames(tester, const Duration(seconds: 2));
     expect(tester.binding.hasScheduledFrame, isFalse);
     await _unmount(tester);
@@ -96,7 +101,10 @@ void main() {
     );
     await _waitForRows(tester);
 
-    final rebuilds = await _rebuilds(() => perfChatFling(tester, rounds: 2));
+    final rebuilds = await _rebuilds(
+      tester,
+      () => perfChatFling(tester, rounds: 2),
+    );
     expect(rebuilds[ChatView] ?? 0, lessThanOrEqualTo(2));
     expect(rebuilds[ConversationBubble] ?? 0, 0, reason: 'bubbles only moved');
     expect(rebuilds[MessageContent] ?? 0, 0);
@@ -123,7 +131,10 @@ void main() {
       perfApp(fixture.client, perfChatPage(fixture.room)),
     );
     await _waitForRows(tester);
-    final rebuilds = await _rebuilds(() => perfKeyboard(tester, times: 2));
+    final rebuilds = await _rebuilds(
+      tester,
+      () => perfKeyboard(tester, times: 2),
+    );
     expect(rebuilds[ConversationBubble] ?? 0, 0);
     expect(rebuilds[MessageContent] ?? 0, 0);
     await _unmount(tester);

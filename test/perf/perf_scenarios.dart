@@ -4,6 +4,7 @@
 // budget test (test/perf/frame_budget_test.dart, fake time). `pump` with a
 // duration elapses fake time in widget tests and waits in real time on a
 // device, so the same script drives both.
+import 'package:chatloom/personal/ui/notion_inbox_row.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -24,6 +25,19 @@ Future<void> perfFrames(WidgetTester tester, Duration total) async {
 /// time in widget tests.
 Future<void> perfReady(WidgetTester tester) async {
   for (var i = 0; i < 50 && find.byType(Scaffold).evaluate().isEmpty; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(perfFrame);
+  }
+}
+
+/// Waits until the inbox shows rows: the hidden/kept registries restore
+/// outside fake time in widget tests, and the inbox stays empty until then.
+Future<void> perfInboxRows(WidgetTester tester) async {
+  await perfReady(tester);
+  final rows = find.byType(NotionInboxRow);
+  for (var i = 0; i < 50 && rows.evaluate().isEmpty; i++) {
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 20)),
     );

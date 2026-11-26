@@ -242,9 +242,55 @@ void main() {
       );
       // Still deleting under its new event ID.
       expect(MessageDeletions.deleting(landed), isTrue);
+      expect(MessageDeletions.debugLandingWatches, 1);
       client.onTimelineEvent.add(landed);
       await tester.pump();
       expect(landed.redactions, 1);
+      expect(MessageDeletions.debugLandingWatches, 0);
+      // A second echo of the same message is not deleted twice.
+      client.onTimelineEvent.add(landed);
+      await tester.pump();
+      expect(landed.redactions, 1);
+      MessageDeletions.debugReset(client);
+    });
+
+    testWidgets('a sending message whose send is cancelled stops waiting', (
+      tester,
+    ) async {
+      final client = ConversationClient();
+      final room = _Room(client, '!cancelled:example.invalid');
+      final sending = _Own(
+        room: room,
+        id: 'txn-2',
+        status: EventStatus.sending,
+        unsigned: {'transaction_id': 'txn-2'},
+      );
+      late BuildContext context;
+      await tester.pumpWidget(
+        _host(
+          client,
+          Builder(
+            builder: (c) {
+              context = c;
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
+      final open = MessageDeletions.debugLandingWatches;
+      await MessageDeletions.delete(
+        context,
+        sending,
+        confirm: false,
+        refresh: () {},
+      );
+      expect(MessageDeletions.debugLandingWatches, open + 1);
+      client.onCancelSendEvent.add('txn-other');
+      await tester.pump();
+      expect(MessageDeletions.debugLandingWatches, open + 1);
+      client.onCancelSendEvent.add('txn-2');
+      await tester.pump();
+      expect(MessageDeletions.debugLandingWatches, open);
       MessageDeletions.debugReset(client);
     });
   });

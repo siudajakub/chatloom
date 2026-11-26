@@ -21,10 +21,14 @@ class _Probe extends StatelessWidget {
   }
 }
 
-Widget _app(Widget child, {ValueNotifier<bool>? visible}) => MaterialApp(
+Widget _app(
+  Widget child, {
+  ValueNotifier<bool>? visible,
+  ValueNotifier<bool>? active,
+}) => MaterialApp(
   theme: NotionTheme.build(Brightness.dark),
   builder: (context, app) =>
-      NotionActivity(windowVisible: visible, child: app!),
+      NotionActivity(windowVisible: visible, windowActive: active, child: app!),
   home: Scaffold(body: Center(child: child)),
 );
 
@@ -93,6 +97,36 @@ void main() {
     visible.value = true;
     await tester.pump();
     expect(seen.last, (true, false));
+  });
+
+  testWidgets('before any lifecycle state, an unfocused window is inactive', (
+    tester,
+  ) async {
+    // The engine reports the lifecycle only on change: a macOS window
+    // launched unfocused has none, so the native focus signal decides.
+    tester.binding.resetInternalState();
+    expect(tester.binding.lifecycleState, isNull);
+    final active = ValueNotifier(false);
+    addTearDown(active.dispose);
+    final seen = <(bool, bool)>[];
+    await tester.pumpWidget(_app(_Probe(seen), active: active));
+    expect(seen.last, (false, true));
+    active.value = true;
+    await tester.pump();
+    expect(seen.last, (true, false));
+    active.value = false;
+    await tester.pump();
+    expect(seen.last, (false, true));
+    // Once the engine reports a state, it decides (it reports focus too).
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(seen.last, (true, false));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(seen.last, (false, true));
+    active.value = true;
+    await tester.pump();
+    expect(seen.last, (false, true));
   });
 
   testWidgets('scrolling an unfocused window animates for a grace period', (
