@@ -187,6 +187,11 @@ class PersonalReplica {
   final String Function() newOperationId;
   final DateTime Function() clock;
   final void Function()? onChanged;
+
+  /// Called with the entity of every commit, before [onChanged], so a
+  /// listener can tell which entities a change notification covers (e.g. a
+  /// draft keystroke touches only `draft:<room>`).
+  final void Function(String entity)? onEntityChanged;
   final values = <String, Map<String, dynamic>>{};
   final revisions = <String, int>{};
   final conflicts = <String, Map<String, dynamic>>{};
@@ -246,6 +251,7 @@ class PersonalReplica {
     required this.newOperationId,
     required this.clock,
     this.onChanged,
+    this.onEntityChanged,
   });
 
   Future<T> _serial<T>(Future<T> Function() action) {
@@ -279,6 +285,7 @@ class PersonalReplica {
     await write('replica:$entity', record);
     _records[entity] = _copy(record);
     _expose(entity, record);
+    onEntityChanged?.call(entity);
     onChanged?.call();
   }
 

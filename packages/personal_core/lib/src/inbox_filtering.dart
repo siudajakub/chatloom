@@ -64,6 +64,27 @@ class InboxRecord {
     this.lastActivity,
   }) : networks = Set.unmodifiable(networks),
        labelKeys = Set.unmodifiable(labelKeys);
+
+  /// This record with [hasDraft] replaced (a draft saved or cleared).
+  InboxRecord withDraft(bool hasDraft) => InboxRecord(
+    representativeRoomId: representativeRoomId,
+    entityId: entityId,
+    displayName: displayName,
+    metadata: metadata,
+    networks: networks,
+    labelKeys: labelKeys,
+    isGroup: isGroup,
+    technical: technical,
+    messageRequest: messageRequest,
+    placement: placement,
+    unread: unread,
+    unreadCount: unreadCount,
+    hasDraft: hasDraft,
+    unanswered: unanswered,
+    movedDown: movedDown,
+    lastActivity: lastActivity,
+  );
+
   @override
   String toString() => 'InboxRecord(redacted)';
 }
@@ -75,7 +96,17 @@ List<InboxRecord> projectInbox(
   String? labelKey,
   Set<String> hiddenLabelKeys = const {},
 }) {
-  final terms = query.toLowerCase().trim().split(RegExp(r'\s+'));
+  final trimmed = query.toLowerCase().trim();
+  // An empty query matches everything: no per-record search text is built.
+  final terms = trimmed.isEmpty
+      ? const <String>[]
+      : trimmed.split(RegExp(r'\s+'));
+  bool matches(String Function() searchable) {
+    if (terms.isEmpty) return true;
+    final text = searchable().toLowerCase();
+    return terms.every(text.contains);
+  }
+
   final result = records.where((record) {
     var placement = record.metadata.placement ?? record.placement;
     // A pinned group stays on the main list as well as under Groups.
@@ -85,11 +116,7 @@ List<InboxRecord> projectInbox(
         record.metadata.ignored || placement == ChatPlacement.ignored;
     if (record.technical)
       return filter == InboxFilter.technical &&
-          terms.every(
-            '${record.displayName} ${record.networks.join(' ')}'
-                .toLowerCase()
-                .contains,
-          );
+          matches(() => '${record.displayName} ${record.networks.join(' ')}');
     if (filter == InboxFilter.technical) return false;
     if (ignored && filter != InboxFilter.ignored) return false;
     if (!ignored && filter == InboxFilter.ignored) return false;
@@ -132,27 +159,39 @@ List<InboxRecord> projectInbox(
       InboxFilter.requests =>
         record.messageRequest && !record.metadata.archived,
     };
-    final searchable = '${record.displayName}\n${record.networks.join(' ')}'
-        .toLowerCase();
-    return matchesFilter && terms.every(searchable.contains);
+    return matchesFilter &&
+        matches(() => '${record.displayName}\n${record.networks.join(' ')}');
   }).toList();
-  result.sort((a, b) {
-    if (a.metadata.isPinned != b.metadata.isPinned)
-      return a.metadata.isPinned ? -1 : 1;
-    if (a.metadata.isPinned) {
-      final pin = a.metadata.pinOrder!.compareTo(b.metadata.pinOrder!);
+  // One clock reading per projection: a timed mute ending mid-sort can no
+  // longer make the comparator inconsistent, and the sort keys are computed
+  // once per record instead of on every comparison.
+  final now = DateTime.now();
+  final keyed = [
+    for (final record in result)
+      (
+        record: record,
+        raised: _raised(record, now),
+        time: (record.lastActivity ?? _epoch).microsecondsSinceEpoch,
+      ),
+  ];
+  keyed.sort((a, b) {
+    final x = a.record.metadata, y = b.record.metadata;
+    if (x.isPinned != y.isPinned) return x.isPinned ? -1 : 1;
+    if (x.isPinned) {
+      final pin = x.pinOrder!.compareTo(y.pinOrder!);
       if (pin != 0) return pin;
-    } else if (_raised(a) != _raised(b)) {
-      return _raised(a) ? -1 : 1;
+    } else if (a.raised != b.raised) {
+      return a.raised ? -1 : 1;
     }
-    final time = (b.lastActivity ?? DateTime.fromMillisecondsSinceEpoch(0))
-        .compareTo(a.lastActivity ?? DateTime.fromMillisecondsSinceEpoch(0));
-    return time != 0 ? time : a.entityId.compareTo(b.entityId);
+    final time = b.time.compareTo(a.time);
+    return time != 0 ? time : a.record.entityId.compareTo(b.record.entityId);
   });
-  return List.unmodifiable(result);
+  return List.unmodifiable([for (final entry in keyed) entry.record]);
 }
+
+final _epoch = DateTime.fromMillisecondsSinceEpoch(0);
 
 /// Unread, unmuted chats sit above the other unpinned chats unless the user
 /// moved them down; inside each band the newest message comes first.
-bool _raised(InboxRecord record) =>
-    record.unread && !record.metadata.muted && !record.movedDown;
+bool _raised(InboxRecord record, DateTime now) =>
+    record.unread && !record.metadata.mutedAt(now) && !record.movedDown;
