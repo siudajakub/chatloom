@@ -71,13 +71,29 @@ Xcode signing override, preserves sandbox permissions and restores the original
 entitlement files. It does not install the app. Linux can run the shared tests
 but cannot compile this macOS target.
 
-### Stable local signature (no repeated Keychain prompts)
+### Stable local signature and the one Keychain prompt per update
 
-An ad-hoc signature identifies the app by its code hash, which changes with
-every build. The login Keychain then treats each build as a new program and
-asks for the Mac password once per stored item at startup. Signing local
-release builds with one self-signed certificate keeps the app's designated
-requirement stable, so "Always Allow" survives later builds.
+The login Keychain guards each item twice. Its access list names the
+programs allowed to read the item by their designated requirement, and its
+partition list names them by Apple Team ID or, for a certificate without a
+Team ID (ad-hoc or self-signed), by the code hash of one exact build. A
+self-signed certificate keeps the designated requirement stable, but every
+new build still has a new code hash, so macOS asks for the Mac password once
+per item after each update; "Allow" covers one read, "Always Allow" only the
+current build. Only a certificate with a Team ID (Apple Developer ID) ends
+the prompts.
+
+So on macOS the app keeps all of its secrets (database keys, app lock,
+push nonce and the rest) in one AES-256-GCM encrypted file,
+`<Application Support>/secret_vault/vault.v1` in its sandbox, and the
+file's key is its only Keychain item (`chatloom.secret_vault.key`,
+`lib/personal/storage/secret_vault.dart`). An update therefore asks once:
+enter the password and choose **Always Allow**. The first launch with the
+vault copies each existing Keychain item into it, which asks for those items
+one last time; the old items stay in the Keychain untouched. The vault fails
+closed: a missing or wrong key or a damaged file stops startup instead of
+creating new keys, and a second running instance is serialized by a lock
+file. Android, iOS and Linux keep the plugin's storage unchanged.
 
 Create the certificate once on the Mac:
 
@@ -106,12 +122,9 @@ entitlements, and fails if the designated requirement still pins a code hash.
 The manifest's `signing` field records the identity. On the first build,
 `codesign` may ask for access to the private key; choose Always Allow.
 
-On the first launch after switching from ad-hoc to this certificate, macOS
-asks for each Keychain item one last time: enter the password and choose
-**Always Allow**. Existing Keychain items, sessions and data are kept. Later
-builds signed with the same certificate do not ask again. If the certificate
-is deleted or replaced, the prompts return once for the new one. The smoke
-test stays ad-hoc signed.
+Existing Keychain items, sessions and data are kept when the certificate
+changes. Without a Team ID each update still asks once for the vault key
+(see above). The smoke test stays ad-hoc signed.
 
 #### The same certificate in CI
 
@@ -182,7 +195,9 @@ build must equal that of a local build (`codesign -d -r- ChatLoom.app`).
 
 ## Storage and media
 
-All secure-storage consumers use the same macOS login Keychain options. This
+All secure-storage consumers go through `personalSecureStorage`, which on
+macOS stores their values in the secret vault described above; its one key
+and the old items use the same macOS login Keychain options. This
 uses the platform's Keychain without Keychain Sharing or a provisioning profile,
 as supported by `flutter_secure_storage`. Its service is scoped to
 `pl.personal.chat`, separating it from other Flutter applications. The smoke

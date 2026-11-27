@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:chatloom/personal/media/media_access.dart';
 import 'package:chatloom/personal/media/voice_remux.dart';
+import 'package:chatloom/personal/storage/secret_vault.dart';
 import 'package:chatloom/personal/storage/sql_cipher_json_database.dart';
 import 'package:chatloom/personal/storage/storage_failure.dart';
 import 'package:chatloom/utils/personal_secure_storage.dart';
@@ -59,6 +60,13 @@ void main() {
       await storage.write(key: marker, value: cipher);
       expect(await storage.read(key: marker), cipher);
       expect(await otherService.read(key: marker), 'synthetic-other-service');
+      // The value sits in the secret vault; its key is the one real
+      // Keychain item of the app's service.
+      const appKeychain = FlutterSecureStorage(
+        mOptions: personalMacStorageOptions,
+      );
+      expect(await appKeychain.read(key: marker), isNull);
+      expect(await appKeychain.read(key: SecretVault.masterKeyName), isNotNull);
       database = await SqlCipherJsonDatabase.open(path: path, cipher: cipher);
       await database.put('fixture', {'value': 'synthetic-ci-canary'});
       await database.close();

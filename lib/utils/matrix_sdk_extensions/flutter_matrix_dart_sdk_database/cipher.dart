@@ -27,10 +27,13 @@ class _SecureKeyVault implements KeyVault {
 
   static const _options = IOSOptions(groupId: 'group.im.fluffychat.app');
 
-  FlutterSecureStorage get _storage => const FlutterSecureStorage(
-    iOptions: _options,
-    mOptions: personalMacStorageOptions,
-  );
+  // macOS keeps these keys in the one-item secret vault like every secret.
+  FlutterSecureStorage get _storage => PlatformInfos.isMacOS
+      ? personalSecureStorage
+      : const FlutterSecureStorage(
+          iOptions: _options,
+          mOptions: personalMacStorageOptions,
+        );
 
   @override
   Future<String?> read(String key) async {
@@ -44,7 +47,16 @@ class _SecureKeyVault implements KeyVault {
     return legacy;
   }
 
+  // CipherPolicy writes only a newly generated key and then reads it back;
+  // on macOS a key another app instance stored first wins, so the check
+  // fails instead of overwriting it.
   @override
-  Future<void> write(String key, String value) =>
-      _storage.write(key: key, value: value, iOptions: _options);
+  Future<void> write(String key, String value) async {
+    final vault = PersonalSecureStorage.macVault;
+    if (vault != null) {
+      await vault.createIfAbsent(key, value);
+      return;
+    }
+    await _storage.write(key: key, value: value, iOptions: _options);
+  }
 }
